@@ -7,10 +7,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { config, writeConfig, DEFAULTS } from '../../config/store.js'
 import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js'
-import { apiGet, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js'
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js'
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js'
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js'
-import { writesToday, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js'
+import { writesToday, interactionsToday, interactedWithin, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js'
 import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN } from '../../lib/schedule.js'
 
 // ── 小工具 ─────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ export const HELP = `用法: node bili.mjs <命令> [参数…]
   selftest                启动自检（装完先跑这个）
   login                   扫码登录（手机 B 站 App 扫码，免手抄 cookie）
   whoami                  cookie 是哪个号
-  feed [--n 5]            今天的候选（只读）
+  feed [--n 5] [--kw 词,词]  今天的候选（只读；--kw 由你自己定，不给就热门）
   video <BV> [--read 全文|mm:ss-mm:ss]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
@@ -55,15 +55,21 @@ export const HELP = `用法: node bili.mjs <命令> [参数…]
                           抽帧九宫格：等间隔抽 N 帧拼一张图（默认 3×3），拿路径去看画面
                           （需要 ffmpeg；没装就只这一条用不了，其余照常）
   comment <BV> --message "…" --dry|--go
-                          发一条评论（唯一写操作；必须 --dry 或 --go）
+                          发一条评论（必须 --dry 或 --go）
+  interact <BV|UID> --like | --coin [1|2] | --follow [--undo] [--dry|--go]
+                          点赞 / 投币 / 关注（--undo 取消赞、取关；币收不回没有 --undo）
+                          一次只做一件；写操作必须 --dry 或 --go
   diary <text…> | show    写日记 / 看最近
   ledger                  今天的额度账本
+  taste [--days 30] [--n 15]
+                          口味回顾：最近看过的、常看的 UP、动过手的（只读账本，自己判断）
   schedule add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"]
                           排一拍（一次性 / 每天 / 每隔 N 分钟）—— 到点宿主照投，带你自己写的标签
   schedule list           看排了什么（最近投过的也在）
   schedule drop <id>      撤一条；schedule clear 全撤（撤完宿主恢复兜底节拍）
 安全约定（代码强制）：
-  · 写操作必须显式 --dry 或 --go；每天 ≤${DEFAULTS.quota.writeDaily} 条；同一视频 7 天一次
+  · 写操作必须显式 --dry 或 --go；评论每天 ≤${DEFAULTS.quota.writeDaily} 条、互动 ≤${DEFAULTS.quota.interactDaily} 次；
+    同一视频 7 天内同一种评论/互动只做一次（取消类不占额度）
   · 撞 412/风控码自动熔断 5–30 分钟；凭据永不回显`
 
 export async function cmdSelftest(asJson) {
@@ -117,7 +123,10 @@ export async function cmdSelftest(asJson) {
   } catch (e) { add('数据目录', false, `${DATA_DIR} 写不进去：${e.message}`) }
   try {
     fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true })
-    if (!fs.existsSync(DIARY_FILE)) fs.writeFileSync(DIARY_FILE, '# 小鲤的日记\n\n')
+    if (!fs.existsSync(DIARY_FILE)) {
+      const nm = String(config().persona?.name ?? '').trim()   // 名字只在配置里（可空）
+      fs.writeFileSync(DIARY_FILE, `# ${nm ? nm + '的' : ''}日记\n\n`)
+    }
     add('日记', true, `${DIARY_FILE} ✓`)
   } catch (e) { add('日记', false, `${DIARY_FILE}：${e.message}`) }
   add('心跳', true, `兜底节拍每 ${Number(config().pulse?.everyMin) || 60} 分钟一拍 —— 只在它没排计划时走；排了计划（schedule add）宿主只按它的计划投拍 ✓`)
@@ -176,17 +185,16 @@ export async function cmdWhoami() {
 
 export async function cmdFeed(flags) {
   const n = Math.min(10, Math.max(1, Number(flags.get('n') ?? 5)))
-  const cfg = config()
-  const like = (cfg.preferences?.like ?? []).map(String).filter(Boolean)
-  const dislike = (cfg.preferences?.dislike ?? []).map(String).filter(Boolean)
+  // 口味不存配置：想搜什么由它此刻自己定（--kw，逗号分隔，最多 3 个）；不给就只拿热门当候选，
+  // 喜不喜欢全在它自己脑子里 —— 看标题挑，不用谁预先告诉它「爱看 / 不爱看」什么。
+  const keywords = String(flags.get('kw') ?? '').split(/[,，、;；]+/).map((s) => s.trim()).filter(Boolean).slice(0, 3)
   const cred = loadCred()
   const seen = seenSet()
   const pool = []
   const push = (v) => { if (BV_RE.test(v.bvid ?? '') && !seen.has(v.bvid) && !pool.some((x) => x.bvid === v.bvid)) pool.push(v) }
 
-  // ① 照偏好搜（每条偏好取第一个可切的短词）
-  for (const pref of like.slice(0, 3)) {
-    const kw = pref.split(/[\s·,，、/]+/).map((s) => s.trim()).find((s) => s.length >= 2) ?? pref
+  // ① 自己给的关键词搜（不给就跳过）
+  for (const kw of keywords) {
     try {
       const qs = await wbi({ search_type: 'video', keyword: kw.slice(0, 40), page: 1 }, cred)
       const j = await apiGet(`https://api.bilibili.com/x/web-interface/wbi/search/type?${qs}`, { cred, referer: 'https://search.bilibili.com/' })
@@ -204,11 +212,10 @@ export async function cmdFeed(flags) {
       for (const r of j.data?.list ?? []) push({ bvid: r.bvid, title: r.title, up: r.owner?.name, play: r.stat?.view, duration: fmtDur(r.duration), why: '热门' })
     } catch (e) { console.log(`（热门列表失败：${e.message}）`) }
   }
-  // ③ 过滤不爱看的
-  const bad = (t) => dislike.some((d) => t.includes(d))
-  const picks = pool.filter((v) => !bad(v.title)).slice(0, n)
-  if (!picks.length) { console.log('（没有捞到候选 —— 换几个偏好关键词，或稍后再试）'); return }
-  console.log(`今天的候选（${picks.length} 条，已排除看过的${dislike.length ? ' / 不爱看的' : ''}）：`)
+  // ③ 只排除看过的；不预先排除任何题材 —— 要不要看它自己判断
+  const picks = pool.slice(0, n)
+  if (!picks.length) { console.log('（没有捞到候选 —— 换几个 --kw 关键词，或稍后再试）'); return }
+  console.log(`今天的候选（${picks.length} 条，已排除看过的）：`)
   for (const [i, v] of picks.entries()) {
     console.log(`\n[${i + 1}] ${v.bvid} —— ${v.title}`)
     console.log(`    ${v.up ?? '?'} · 播放 ${fmtNum(v.play)} · ${durText(v.duration)} · ${v.why}`)
@@ -268,7 +275,7 @@ export async function cmdVideo(flags, positional) {
       }
     } else console.log('--- 没有评论 ---')
   } catch (e) { console.log(`（热评读取失败：${e.message}）`) }
-  ledgerAppend({ type: 'watch', bvid, title: String(v.title).slice(0, 60) })
+  ledgerAppend({ type: 'watch', bvid, up: v.owner?.name ? String(v.owner.name).slice(0, 40) : undefined, title: String(v.title).slice(0, 60) })
 }
 
 /** 深读：字幕正文，全文或按时间区间，绝不截断 —— 深浅是 agent 的事，读不设限（克制只管写） */
@@ -418,6 +425,106 @@ export async function cmdComment(flags, positional) {
   console.log('把这条也记进 diary ✓（说了什么、为什么值得）')
 }
 
+// ── interact：点赞 / 投币 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
+// 三种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
+// 是在纠正前面的动作，不占额度也不判重 —— 但仍要 --dry / --go 与同一套节流熔断。
+const INTERACT_USAGE = `用法: node bili.mjs interact <BV|UID> (--like | --coin [1|2] | --follow) [--undo] [--dry|--go]
+  --like        点赞（--undo = 取消赞）
+  --coin [1|2]  投币，默认 1 个（币投出去收不回 —— 没有 --undo）
+  --follow      关注这条视频的 UP（目标写成 UID 也行；--undo = 取关）
+  一次只做一件事；写操作必须 --dry（只打印）或 --go（真的做）`
+
+const ACT_TEXT = { like: '点赞', coin: '投币', follow: '关注' }
+
+export async function cmdInteract(flags, positional) {
+  const target = String(positional[0] ?? '')
+  const dry = flags.has('dry') || flags.get('dry') === true
+  const go = flags.has('go') || flags.get('go') === true
+  const undo = flags.has('undo') || flags.get('undo') === true
+  const picked = ['like', 'coin', 'follow'].filter((k) => flags.has(k))
+  if (picked.length !== 1) { console.error(`✗ 一次只做一件事（--like / --coin / --follow 选一个）\n\n${INTERACT_USAGE}`); process.exit(2) }
+  if (dry && go) { console.error('--dry 和 --go 二选一'); process.exit(2) }
+  if (!dry && !go) { console.error('拒绝裸跑：写操作必须显式 --dry（只打印）或 --go（真的做）'); process.exit(2) }
+  const action = picked[0]
+  if (undo && action === 'coin') { console.error('✗ 币投出去收不回 —— 投币没有 --undo（额度就这么用掉了，下次先 --dry 看一眼）'); process.exit(2) }
+  const isBv = BV_RE.test(target)
+  if (!isBv && !(action === 'follow' && /^\d{1,12}$/.test(target))) {
+    console.error(`✗ 目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}\n\n${INTERACT_USAGE}`)
+    process.exit(2)
+  }
+  let n = 1
+  if (action === 'coin') {
+    const raw = flags.get('coin')
+    n = raw === true ? 1 : Number(raw)
+    if (![1, 2].includes(n)) { console.error('✗ --coin 只能投 1 或 2 个'); process.exit(2) }
+  }
+
+  const cfg = config()
+  if (cfg.share?.enabled === false) { console.error('分享已在设置里关闭（share.enabled=false）→ 这次不做（看视频/写日记照常 ✓）'); process.exit(3) }
+  const cred = loadCred()
+  const miss = ['sessdata', 'bili_jct'].filter((k) => !cred[k])
+  if (miss.length) { console.error(`凭据缺 ${miss.join(', ')} —— 写操作必须要，去设置页补`); process.exit(3) }
+
+  // 视频类互动要拿 aid（点赞/投币接口只认 aid）与 UP 的 mid（关注）；只读，--dry 也要这一步
+  const v = isBv ? await getView(target, cred) : null
+  const fid = action !== 'follow' ? '' : (isBv ? String(v.owner?.mid ?? '') : target)
+  if (action === 'follow' && !fid) { console.error('✗ 拿不到 UP 的 mid —— 用 UID 直接关注'); process.exit(4) }
+  if (action === 'follow' && String(cfg.self?.mid ?? '') === fid) {
+    console.error('✗ 这是你自己（与主人共用的号）—— 不能关注自己'); process.exit(2)
+  }
+
+  const key = action === 'follow' ? `uid:${fid}` : target
+  const where = isBv ? `《${v.title}》（${target}）` : `UID ${fid}`
+  const what = `${undo ? '取消' : ''}${ACT_TEXT[action]}${action === 'coin' ? ` ${n} 个` : ''}`
+  const limit = Math.max(0, Number(cfg.quota?.interactDaily ?? DEFAULTS.quota.interactDaily))
+  const acted = interactionsToday()
+  if (!undo) {
+    if (acted.length >= limit) {
+      console.error(`✗ 今天的互动额度用完了（${acted.length}/${limit}）。明天再说 —— 克制是功能，不是 bug ✓`)
+      process.exit(3)
+    }
+    if (interactedWithin(key, action)) {
+      console.error(`✗ 这个${action === 'follow' ? ' UP' : '视频'} 7 天内已经${ACT_TEXT[action]}过 → 这次不做（判重按 ${action === 'follow' ? 'mid' : 'BV 号'}算）`)
+      process.exit(3)
+    }
+  }
+
+  let url, body
+  if (action === 'like') {
+    url = 'https://api.bilibili.com/x/web-interface/archive/like'
+    body = { aid: String(v.aid), like: undo ? 2 : 1, csrf: cred.bili_jct }
+  } else if (action === 'coin') {
+    url = 'https://api.bilibili.com/x/web-interface/coin/add'
+    body = { aid: String(v.aid), multiply: n, select_like: 0, csrf: cred.bili_jct }
+  } else {
+    url = 'https://api.bilibili.com/x/relation/modify'
+    body = { fid, act: undo ? 2 : 1, re_src: 11, csrf: cred.bili_jct }
+  }
+  const referer = isBv ? `https://www.bilibili.com/video/${target}/` : 'https://space.bilibili.com/'
+
+  if (dry) {
+    console.log(`=== 将要${what}（--dry，没有发）===`)
+    console.log(`  对象：${where}${action === 'follow' && isBv ? ` · UP ${v.owner?.name}` : ''}`)
+    console.log(`  POST ${url}`)
+    console.log(`  ${new URLSearchParams({ ...body, csrf: '***' }).toString()}`)
+    console.log(`  账号：${cfg.self?.name || '(未体检)'} · ${undo ? '取消类不占额度' : `今天已互动 ${acted.length}/${limit} · 做完剩 ${Math.max(0, limit - acted.length - 1)}`}`)
+    console.log('觉得行就去掉 --dry 换 --go')
+    return
+  }
+  // --go：先校验登录态（cookie 失效就别白发一次写请求）
+  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+  if (nav.code !== 0 || nav.data?.isLogin !== true) { console.error(`✗ 登录态失效：${explainCode(nav.code)} —— 重抄 cookie 再来`); process.exit(4) }
+  if (action === 'follow' && String(nav.data.mid) === fid) { console.error('✗ 这是你自己（与主人共用的号）—— 不能关注自己'); process.exit(2) }
+  if (action === 'coin' && nav.data.money !== undefined && Number(nav.data.money) < n) {
+    console.error(`✗ 硬币不够：账上 ${nav.data.money} 个，要投 ${n} 个 —— 别投`); process.exit(3)
+  }
+  console.log(`登录态 ✓ ${nav.data.uname}（mid ${nav.data.mid}）`)
+  const j = await apiPost(url, body, { cred, referer })
+  if (Number(j.code) !== 0) { console.error(`✗ ${what}失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`); process.exit(5) }
+  ledgerAppend({ type: 'interact', action, undo: undo || undefined, target: key, bvid: isBv ? target : undefined, note: `${what} ${isBv ? target : fid}` })
+  console.log(`✓ 已${what}：${where}${action === 'follow' && isBv ? ` · UP ${v.owner?.name}` : ''}${undo ? '' : ` · 今天已互动 ${acted.length + 1}/${limit}`}`)
+}
+
 export async function cmdDiary(positional) {
   if (positional[0] === 'show') {
     const n = Math.min(100, Math.max(1, Number(positional[1] ?? 20)))
@@ -493,12 +600,61 @@ export function cmdSchedule(positional, flags) {
   process.exit(sub ? 2 : 0)
 }
 
+/** 口味回顾：只读账本，把它自己的观看史还给它 —— 喜欢什么由它自己读、自己判断，不存配置 */
+export function cmdTaste(flags) {
+  const days = Math.min(3650, Math.max(1, Number(flags.get('days') ?? 30)))
+  const lim = Math.min(60, Math.max(1, Number(flags.get('n') ?? 15)))
+  const log = readLedger().log
+  const since = Date.now() - days * 86_400_000
+  const recent = log.filter((x) => new Date(x.at).getTime() >= since)
+  const watched = recent.filter((x) => x.type === 'watch')
+  const comments = recent.filter((x) => x.type === 'comment')
+  const acts = recent.filter((x) => x.type === 'interact' && !x.undo)
+  const day = (at) => new Date(at).toLocaleDateString('sv-SE')
+  const earliest = log.length ? day(log[0].at) : null
+
+  console.log(`口味回顾（最近 ${days} 天；账本共 ${log.length} 条${earliest ? `，最早到 ${earliest}` : ''}）`)
+  const byAct = (a) => acts.filter((x) => x.action === a).length
+  console.log(`看过 ${watched.length} 条 · 评论 ${comments.length} 条 · 互动 ${acts.length} 次${acts.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`)
+  if (!watched.length && !comments.length && !acts.length) { console.log('\n（这段时间还没留下记录 —— 去看几条、写点什么，再回来回顾）'); return }
+
+  // UP 只从新记录里有（watch.up 是后加的）；老记录只有标题，照样能读
+  const ups = new Map()
+  for (const x of watched) if (x.up) ups.set(x.up, (ups.get(x.up) ?? 0) + 1)
+  if (ups.size) {
+    console.log('\n常看的 UP：')
+    for (const [name, count] of [...ups].sort((a, b) => b[1] - a[1]).slice(0, 10)) console.log(`  ${name} ×${count}`)
+  }
+
+  console.log(`\n最近看过（最新在前，最多 ${lim} 条）：`)
+  for (const x of watched.slice(-lim).reverse()) console.log(`  ${day(x.at)} ${x.bvid} 《${x.title ?? '?'}》${x.up ? ` · ${x.up}` : ''}`)
+
+  if (comments.length || acts.length) {
+    const titles = new Map()
+    for (const x of log) if (x.bvid && x.title) titles.set(x.bvid, x.title)
+    const touched = [...comments, ...acts].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, lim)
+    console.log('\n动过手的：')
+    for (const x of touched) {
+      const what = x.type === 'comment' ? `评论「${x.note ?? ''}」` : (x.note ?? x.action)
+      const ref = x.bvid && !String(what).includes(x.bvid) ? ` · ${x.bvid}` : ''
+      const title = x.bvid && titles.has(x.bvid) ? ` 《${titles.get(x.bvid)}》` : ''
+      console.log(`  ${day(x.at)} ${what}${ref}${title}`)
+    }
+  }
+  console.log('\n这些都只是你自己的记录 —— 喜欢什么、看腻了什么，自己读、自己判断（想固定下来就写进日记或 persona.md）。')
+}
+
 export function cmdLedger() {
   const led = readLedger()
   const limit = Math.max(0, Number(config().quota?.writeDaily ?? 3))
   const wrote = writesToday()
   console.log(`今天（${today()}）：已写 ${wrote.length}/${limit} 条`)
   for (const x of wrote) console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.type} ${x.bvid} ${x.note ?? x.title ?? ''}`)
+  const ilimit = Math.max(0, Number(config().quota?.interactDaily ?? DEFAULTS.quota.interactDaily))
+  const acted = interactionsToday()
+  const byAct = (a) => acted.filter((x) => x.action === a).length
+  console.log(`互动：${acted.length}/${ilimit} 次${acted.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`)
+  for (const x of acted) console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.note ?? x.action}`)
   const recent = led.log.filter((x) => x.type === 'watch' && new Date(x.at).toLocaleDateString('sv-SE') === today())
   console.log(`看过：${recent.length} 条${recent.length ? '（' + recent.map((x) => x.bvid).join(' ') + '）' : ''}`)
   const banned = banUntil()

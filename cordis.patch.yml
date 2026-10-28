@@ -10,7 +10,7 @@
 #
 # ⚠️ `name:` 必须与安装后的包名完全一致（这里是 dsh-bili-lite），
 #    否则表现为「装上了但设置页 404」。
-# 设置页在：DSH「设置 → B站小鲤」（src/features/settings/client.js 注册的 section）。
+# 设置页在：DSH「设置 → B站养鱼」（src/features/settings/client.js 注册的 section）。
 # ============================================================================
 
 - insert:

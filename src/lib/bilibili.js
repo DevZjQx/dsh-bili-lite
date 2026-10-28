@@ -20,7 +20,7 @@ export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cre
 export function loadCred() {
   let j
   try { j = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8').replace(/^\uFEFF/, '')) }
-  catch { throw new Error(`没有凭据文件：${CRED_FILE}\n  去设置页「B站小鲤」粘贴一次 cookie ✓（SESSDATA 是 HttpOnly，必须 F12 手动复制 ✗）`) }
+  catch { throw new Error(`没有凭据文件：${CRED_FILE}\n  去设置页「B站养鱼」粘贴一次 cookie ✓（SESSDATA 是 HttpOnly，必须 F12 手动复制 ✗）`) }
   const clean = (v) => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '')
   return { sessdata: clean(j.sessdata), bili_jct: clean(j.bili_jct), buvid3: clean(j.buvid3) }
 }
@@ -86,6 +86,13 @@ const CODE_HINTS = {
   12015: '需要验证码 —— 停下，人在浏览器里手动过一次',
   12051: '疑似刷屏 —— 停下，别再发',
   12002: '评论区已关闭 / 不能评论',
+  34002: '不能给自己的视频投币',
+  34003: '这条投不了币（番剧 / 付费 / 特殊稿件）',
+  34004: '投币数超过 2 —— 一条视频最多 2 个',
+  34005: '今日投币上限（已经投满了）—— 明天再说',
+  65004: '取消赞失败 —— 本来就没点过赞',
+  22003: '这个用户不存在',
+  22004: '不能关注自己 —— 这是你和主人共用的号',
 }
 export const explainCode = (code) => CODE_HINTS[String(code)] ?? `code=${code}（未知返回码）`
 
@@ -121,20 +128,33 @@ function throwIfBanned() {
   }
 }
 
-/** 发送段：节流 → 请求 → 412/429 熔断（apiGet / apiText 共用，行为写死一处） */
-async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/' } = {}) {
+/** 发送段：节流 → 请求 → 412/429 熔断（apiGet / apiText / apiPost 共用，行为写死一处） */
+async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', method = 'GET', body } = {}) {
   const gap = Math.max(300, Number(config().risk?.minGapMs ?? 1200))
   const idle = Date.now() - lastRequestAt
   if (lastRequestAt && idle < gap) await sleep(gap - idle)
   lastRequestAt = Date.now()
-  const headers = { 'user-agent': UA, referer, ...(cred ? { cookie: cookieHeader(cred) } : {}) }
-  const r = await fetch(u, { headers, signal: AbortSignal.timeout(30000) })
+  const headers = {
+    'user-agent': UA, referer,
+    ...(cred ? { cookie: cookieHeader(cred) } : {}),
+    ...(body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
+  }
+  const r = await fetch(u, { method, headers, ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(30000) })
   if (r.status === 412 || r.status === 429) {
     const mins = setBan(`HTTP ${r.status}`)
     throw new Error(`HTTP ${r.status}（B站风控）—— 已熔断 ${mins} 分钟，今天先歇了`)
   }
   if (!r.ok) throw new Error(`HTTP ${r.status}（接口异常或风控，稍后再试）`)
   return r
+}
+
+/** 风控码 → 熔断（apiGet / apiPost 共用；只判定，不吞掉非风控的返回码） */
+function guardCode(data) {
+  if (BAN_CODES.has(Number(data.code))) {
+    const mins = setBan(`code=${data.code}`)
+    throw new Error(`${data.message ?? ''}（B站风控 ${data.code}）—— 已熔断 ${mins} 分钟`)
+  }
+  return data
 }
 
 /** 统一 GET JSON：熔断检查 →（可选）缓存 → 发送 → 风控判定 →（可选）落缓存 */
@@ -148,10 +168,7 @@ export async function apiGet(u, { cred, ttlMs = 0, referer = 'https://www.bilibi
   const r = await guardedFetch(u, { cred, referer })
   let data
   try { data = await r.json() } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
-  if (BAN_CODES.has(Number(data.code))) {
-    const mins = setBan(`code=${data.code}`)
-    throw new Error(`${data.message ?? ''}（B站风控 ${data.code}）—— 已熔断 ${mins} 分钟`)
-  }
+  guardCode(data)
   if (Number(data.code) === 0 && key) {
     const store = readJson(CACHE_FILE, {})
     store[key] = { at: Date.now(), data }
@@ -166,6 +183,16 @@ export async function apiGet(u, { cred, ttlMs = 0, referer = 'https://www.bilibi
 export async function apiText(u, opts = {}) {
   throwIfBanned()
   return (await guardedFetch(u, opts)).text()
+}
+
+/** 写操作 POST（点赞 / 投币 / 关注）：节流与熔断跟 apiGet 同一套；
+ *  csrf 由调用方显式放进 body —— 这里不偷偷加，免得写错账号的事故被藏起来 */
+export async function apiPost(u, body, { cred, referer = 'https://www.bilibili.com/' } = {}) {
+  throwIfBanned()
+  const r = await guardedFetch(u, { cred, referer, method: 'POST', body: new URLSearchParams(body).toString() })
+  let data
+  try { data = await r.json() } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
+  return guardCode(data)
 }
 
 // ── WBI 签名（搜索要） ─────────────────────────────────────────────────────

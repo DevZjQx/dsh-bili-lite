@@ -1,5 +1,5 @@
 /**
- * dsh-bili-lite —— 客户端半边：DSH「设置」里的 **B站小鲤** section（极简版）
+ * dsh-bili-lite —— 客户端半边：DSH「设置」里的 B 站分身 section（极简版）
  *
  * 数据流：section ⇄ /dsh-bili-lite/api/*（同源 fetch ✓）⇄ ~/.dsh/bili-lite.config.json
  * 与宿主读**同一份配置**（config/store 是唯一真相）✓ 不存在两套配置。
@@ -45,16 +45,15 @@ window.__ModuleLoader__.load({
 
     // ── 字段清单（唯一真相：加字段只改这里 + 宿主白名单 ✓）─────────────────
     const FIELDS = [
+      { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）和日记抬头；留空就不点名。人设正文仍写 ~/.bili-lite/persona.md", kind: "text" },
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
-      { group: "口味", path: ["preferences", "like"], label: "爱看", hint: "逗号分隔，如：AI 工具, 猫咪, 鬼畜", kind: "list" },
-      { group: "口味", path: ["preferences", "dislike"], label: "不爱看", hint: "逗号分隔，如：带货, 擦边, 标题党", kind: "list" },
       { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "默认 3；>3 看起来会像刷量 ✗", kind: "text" },
+      { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 投币 / 关注合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
       { group: "克制", path: ["risk", "minGapMs"], label: "请求间隔（毫秒）", hint: "默认 1200；连击是最容易被判机器人的特征 ✗", kind: "text" },
     ];
 
     const get = (o, path) => path.reduce((a, k) => (a ?? {})[k], o);
     const set = (o, path, v) => { const [k, ...rest] = path; if (!rest.length) { o[k] = v; return o } if (!o[k] || typeof o[k] !== "object") o[k] = {}; set(o[k], rest, v); return o };
-    const fromList = (s) => String(s ?? "").split(/[,，]/).map((x) => x.trim()).filter(Boolean);
     const QR_STATUS = { waiting: "等待扫码…（手机 B 站 App → 扫一扫）", scanned: "已扫码 —— 请在手机上点「确认登录」", expired: "二维码已过期，重新点「显示二维码」", gone: "后台重启过，重新点「显示二维码」" };
 
     function BiliLiteSection() {
@@ -87,7 +86,6 @@ window.__ModuleLoader__.load({
         setBusy("save"); setErr(""); setOkMsg("");
         try {
           const body = JSON.parse(JSON.stringify(cfg));
-          for (const f of FIELDS) if (f.kind === "list") set(body, f.path, fromList(get(body, f.path)));
           const r = await fetch(`${API}/settings`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
           const d = await r.json();
           if (!d.ok) throw new Error(d.error || "保存失败");
@@ -146,7 +144,7 @@ window.__ModuleLoader__.load({
         finally { setBusy("") }
       }, [load]);
 
-      if (!cfg) return h("div", { className: "bll" }, h("h3", { className: "bll-title" }, "B站小鲤"), busy ? h("div", { className: "bll-hint" }, "读取中…") : err ? h("div", { className: "bll-err" }, err) : null);
+      if (!cfg) return h("div", { className: "bll" }, h("h3", { className: "bll-title" }, "B站养鱼"), busy ? h("div", { className: "bll-hint" }, "读取中…") : err ? h("div", { className: "bll-err" }, err) : null);
 
       const dirty = saved && JSON.stringify(cfg) !== saved;
       const ci = { className: "bll-input", autoComplete: "off", spellCheck: false };
@@ -161,7 +159,7 @@ window.__ModuleLoader__.load({
         : `每 ${pulse.everyMin} 分钟一拍 · 共 ${pulse.beats} 拍` + (pulse.lastBeatText ? ` · 上一拍 ${pulse.lastBeatText}` : " · 下一拍马上来") + planLine;
 
       return h("div", { className: "bll" },
-        h("h3", { className: "bll-title" }, "B站小鲤"),
+        h("h3", { className: "bll-title" }, String(cfg.persona?.name ?? "").trim() || "B站养鱼"),   // 配了名字就显示名字（插件不写死）
         h("p", { className: "bll-intro" },
           "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
         pulseLine ? h("div", { className: "bll-hint" }, "💓 " + pulseLine) : null,
@@ -217,7 +215,7 @@ window.__ModuleLoader__.load({
       ctx.effect(
         () => ctx.slots.inject("settings.section", () =>
           ctx.slots.register(
-            { name: "settings.section", id: NS, order: 7, label: () => "B站小鲤" },
+            { name: "settings.section", id: NS, order: 7, label: () => "B站养鱼" },
             BiliLiteSection,
           ),
           "bili-lite: settings section",

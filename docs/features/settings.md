@@ -1,6 +1,6 @@
 # settings（设置与凭据）
 
-**Purpose.** 主人配置小鱼的地方：心跳节拍、口味、克制额度、B 站凭据 —— 一个设置页 + 一组同源 API。
+**Purpose.** 主人配置它的地方：心跳节拍、克制额度、B 站凭据 —— 一个设置页 + 一组同源 API。口味不在这里：看什么由 agent 自己在 `feed --kw` 时决定。
 
 **Owns.** GET/POST `/dsh-bili-lite/api/settings`（读写 `~/.dsh/bili-lite.config.json`，含顶层白名单与范围校验）；POST `/api/cookie`（先真实 nav 验证、通过才落盘、永不回显）；POST `/api/qr/start` 与 `/api/qr/poll`（扫码登录：start 用 `lib/qrcode` 出 SVG dataURL，poll 查状态，成功后验证并经 `saveCred` 落盘；会话只存内存，重启丢失重扫即可）；GET `/api/selftest`（真跑一次 agent CLI 的 `selftest --json`）；浏览器半边 `client.js`（设置 section UI、字段清单 FIELDS、扫码二维码展示与 2s 轮询、心跳状态展示）。
 

@@ -10,7 +10,7 @@
  *      POST /api/qr/poll 轮询状态；成功后验证并落盘。会话只存内存（重启丢失，重扫即可）
  *   4. 自检：GET /dsh-bili-lite/api/selftest → 真跑一次 `node <bili.mjs> selftest --json`
  *
- * 浏览器半边在本目录 client.js（DSH 设置页的「B站小鲤」section），由包导出
+ * 浏览器半边在本目录 client.js（DSH 设置页的「B站养鱼」section），由包导出
  * ./client 加载 —— 单文件加载契约，两侧互不 import，靠同一份 API 契约对齐。
  * 错误约定：handler 内自己返 { ok:false, error }；漏网抛错由 app 的 route 兜底成 500。
  */
@@ -48,7 +48,10 @@ export function registerSettings({ route, isTrusted, cliPath }) {
     cur.pulse.everyMin = Number.isFinite(em) ? Math.min(360, Math.max(5, em)) : DEFAULTS.pulse.everyMin
     const wd = Number(cur.quota.writeDaily)
     cur.quota.writeDaily = Number.isFinite(wd) ? Math.min(10, Math.max(0, wd)) : DEFAULTS.quota.writeDaily
+    const id = Number(cur.quota.interactDaily)
+    cur.quota.interactDaily = Number.isFinite(id) ? Math.min(50, Math.max(0, id)) : DEFAULTS.quota.interactDaily
     cur.risk.minGapMs = Math.min(60000, Math.max(300, Number(cur.risk.minGapMs) || DEFAULTS.risk.minGapMs))
+    cur.persona = { name: String(cur.persona?.name ?? '').trim().slice(0, 24) }   // 名字只用于抬头：去掉空白、限长
     writeConfig(cur)   // 心跳每拍都重新读配置 → 保存即生效，无需任何回调 ✓
     json(res, 200, {
       ok: true, config: cur,

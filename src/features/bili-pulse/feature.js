@@ -30,6 +30,8 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   let beats = 0
 
   const everyMs = (cfg) => Math.max(1, Number(cfg.pulse?.everyMin) || DEFAULTS.pulse.everyMin) * 60_000
+  /** 它的名字只来自配置（persona.name）—— 没配就不点名，插件里不写死任何名字 */
+  const nameOf = (cfg) => String(cfg?.persona?.name ?? '').trim()
 
   /** 人设前缀 + 工具与克制的提醒 —— 两种拍共用；宿主只对表，不指挥 */
   function commonText(cfg, titleLine) {
@@ -39,10 +41,10 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
     return head + [titleLine, '',
       '你在 DSH 里替主人运营这个 B 站账号 —— 你和他**共用一个身份**：你发的每条评论都是以主人的名义公开出现，他自己都看得到，不需要也不要 @ 任何人。唯一的工具：',
       `  node ${cliPath} <子命令>`,
-      '常用（别跳步）：selftest（有 ✗ 先照提示修）→ feed（从候选里挑想看的）→ video <BV>（章节/字幕/弹幕热词/热评都过一眼，好奇就 --read 深读，读不要钱、不截断；讲的是画面/界面而字幕说不清，就 shots <BV> 抽一张九宫格看一眼）→ diary（给自己写一段）→ 最多挑 1 条值得发的 comment <BV>（先 --dry 再 --go）。',
+      '常用（别跳步）：selftest（有 ✗ 先照提示修）→ feed [--kw 你想搜的词]（口味由你自己判断，不用等主人配：想搜什么就 --kw，不给就热门里挑）→ video <BV>（章节/字幕/弹幕热词/热评都过一眼，好奇就 --read 深读，读不要钱、不截断；讲的是画面/界面而字幕说不清，就 shots <BV> 抽一张九宫格看一眼）→ diary（给自己写一段）→ 值得就发一条 comment <BV>，真喜欢就 interact <BV> --like / --coin 1 / --follow（都先 --dry 再 --go，互动一次一件）；后悔了加 --undo 取消赞 / 取关（币投出去收不回）。想不起自己最近爱看什么、看腻了什么，就 taste（回顾自己的观看史，只读）—— 口味你自己判断。',
       '',
       '克制（一半写死在工具里，一半在你心里）：',
-      `  · 今天写额度 ≤${Math.max(0, Number(cfg.quota?.writeDaily ?? DEFAULTS.quota.writeDaily))} 条；同一视频 7 天只评一次；拿不准先跑 ledger 对账；`,
+      `  · 今天评论额度 ≤${Math.max(0, Number(cfg.quota?.writeDaily ?? DEFAULTS.quota.writeDaily))} 条、互动额度 ≤${Math.max(0, Number(cfg.quota?.interactDaily ?? DEFAULTS.quota.interactDaily))} 次；同一视频 7 天内同一种评论/互动只做一次；拿不准先跑 ledger 对账；`,
       '  · 你和主人共用身份 —— 每条评论都署他的名，说错话由他承担；',
       '  · 不值得就不发 —— 不发也是完整的一天；',
       '  · 撞到验证码 / 风控：立刻停手，把情况写进 diary，今天不再发任何请求。',
@@ -52,7 +54,7 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   /** 兜底拍文案：不指挥、只对表；顺带把「节奏可以拿回自己手里」告诉它 */
   function beatText(cfg) {
     const now = new Date().toLocaleString('zh-CN', { hour12: false })
-    return commonText(cfg, `【小鱼心跳】现在是 ${now}。`) + '\n' + [
+    return commonText(cfg, `【${nameOf(cfg)}心跳】现在是 ${now}。`) + '\n' + [
       '这一拍是兜底节拍（你还没排作息时宿主才问）：想不想看、什么时候看、今天看几条，全部你自己定 —— 可以开始刷、可以继续昨天没看完的、也可以什么都不干（什么都不干也是完整的一拍）。',
       '作息该你自己规划：node ' + cliPath + ' schedule add --daily 21:00 --label "晚刷" —— 什么时候活跃、什么时候歇着，用计划排出来，排了宿主就只按你的作息投拍（这条兜底节拍暂停），schedule clear 后恢复。排不排都行。',
     ].join('\n')
@@ -61,7 +63,7 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   /** 计划拍文案：投它自己排的那一拍，带它自己写的标签 */
   function planBeatText(due, cfg) {
     const now = new Date().toLocaleString('zh-CN', { hour12: false })
-    return commonText(cfg, `【小鱼计划拍】现在是 ${now}。下面这拍是**你自己排**的：`) + '\n' + [
+    return commonText(cfg, `【${nameOf(cfg)}计划拍】现在是 ${now}。下面这拍是**你自己排**的：`) + '\n' + [
       ...due.map((e) => `  · ${fmtWhen(e)} —— ${e.label}`),
       '',
       '按计划做就好；计划不对就当场改（schedule add / drop <id> / clear），别硬执行已经不对劲的计划。',
