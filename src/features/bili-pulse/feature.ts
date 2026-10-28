@@ -10,8 +10,10 @@
  * 重启 DSH 后一分钟内来第一拍（lastBeat 从 0 起算）；错过的计划拍照投（补上，并说一声）。
  *
  * 不拥有：拿到拍之后的行为（那是 agent 拿着 bili.ts 干的）；额度的执行（bili-agent）；
- * 计划的读写与到期判断（lib/schedule，两侧共用）；配置的校验与保存（settings）。
- * 依赖由 app 注入：getSession（→ sessionController）、route、cliPath。
+ * 计划的读写与到期判断（lib/schedule，两侧共用）；配置的校验与保存（settings）；
+ * 「现在有没有可用模型 / 凭证」的判断（lib/model-ready，app 探好后注入 probeReady）。
+ * 没有可用模型或凭证时不投拍（软等待，不算失败、不记账），恢复后下一拍自动继续。
+ * 依赖由 app 注入：getSession（→ sessionController）、route、cliPath、probeReady。
  */
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -31,6 +33,8 @@ export interface PulseDeps {
   getSession?: () => SessionControllerLike | undefined
   route: Route
   cliPath: string
+  /** 投递前的可用性检查：返回不可用原因；undefined = 可以投（app 注入，pulse 不碰模型服务） */
+  probeReady?: () => Promise<string | undefined>
   log?: (m: string) => void
 }
 
@@ -41,17 +45,21 @@ export interface PulseStatus {
   lastBeatText: string | null
   /** 最近一次投递失败的原因（成功投递后清空）—— 刚装好没投出去时，设置页 / 状态接口就看这里 */
   lastError: string | null
+  /** 最近一次到拍时检查出的「不投拍」原因（没有 API 凭证 / 没有可用模型 / 服务未就绪）；null = 上次检查可投 */
+  gated: string | null
   plan: PlanSummary
 }
 
 export interface PulseApi { stop(): void; status(): PulseStatus }
 
-export function startPulse({ getSession, route, cliPath, log = (m) => { try { console.log(m) } catch {} } }: PulseDeps): PulseApi {
+export function startPulse({ getSession, route, cliPath, probeReady, log = (m) => { try { console.log(m) } catch {} } }: PulseDeps): PulseApi {
   let stopped = false
   let beating = false
   let lastBeat = 0   // 0 = 还没拍过（启动后第一拍马上来）—— 兜底节拍的表；计划拍不受它管
   let beats = 0
   let notReadyWarned = false   // 会话服务没就绪只提醒一次（DSH 刚启动/刚装插件时是常态，不算故障）
+  let gatedWarned = false      // 没有凭证 / 模型也同理：只提醒一次，恢复后重置
+  let gated: string | null = null   // 最近一次检查发现的不投拍原因（状态接口用）
   let lastError: string | null = null
   let failCount = 0            // 连续失败次数：同样的原因不每分钟刷屏
 
@@ -102,6 +110,16 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
     return c && typeof c.prompt === 'function' ? c : undefined
   }
 
+  /** 没有 API 凭证 / 没有可用模型 → 不投递（这是软等待，不算投递失败，也不记账） */
+  async function blockedReason(): Promise<string | undefined> {
+    if (!probeReady) return undefined
+    try {
+      return await probeReady()
+    } catch (e) {
+      return '模型就绪检查失败：' + (e instanceof Error ? e.message : String(e))
+    }
+  }
+
   async function deliver(c: SessionControllerLike, text: string): Promise<void> {
     // 会话可能已存在 → create 会复用并把真正落地的 id 还回来，投递要用这个 id
     let sessionId = SESSION_ID
@@ -137,6 +155,19 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
         }
         return
       }
+      // 没有 API 凭证 / 没有可用模型 → 不投（否则每一拍都会以 MISSING_CREDENTIAL 失败，
+      // 还会在会话里留下一次失败的 run）。恢复后下一拍自动继续。
+      const blocked = await blockedReason()
+      if (blocked !== undefined) {
+        gated = blocked
+        if (!gatedWarned) {
+          gatedWarned = true
+          log(`[bili-lite] 暂不投拍：${blocked}（配好 API 凭证 / 模型后下一拍自动恢复）`)
+        }
+        return
+      }
+      gated = null
+      gatedWarned = false
       if (due.length) {
         await deliver(c, planBeatText(due, cfg))
         markFired(due.map((e) => e.id))
@@ -181,6 +212,7 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
         beats,
         lastBeatText: lastBeat ? new Date(lastBeat).toLocaleString('sv-SE') : null,
         lastError,
+        gated,
         plan: planSummary(),
       }
     },

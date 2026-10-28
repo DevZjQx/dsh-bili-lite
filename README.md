@@ -88,6 +88,7 @@ bun <插件目录>/src/features/bili-agent/bili.ts selftest
 | 「装完了，但找不到它」 | 它的会话在**工作区 → 未分组**里，不点开看不见 ✗ |
 | 「找到了，但什么都不干」 | 新会话默认没有完全权限 ✗ 给它 `danger-full-access` ✓ |
 | 「cookie 填了还是未登录」 | 用了 `document.cookie` ✗ 必须 F12 手动复制 ✓（或者干脆 `bun bili.ts login` 扫码 ✓） |
+| 「心跳一直 0 拍」 | DSH 没有可用的模型 / API 凭证 —— 先在 Models 页配好 key；插件不会投注定失败的拍 ✓ |
 
 想立刻看它跑一轮：把心跳间隔改成 5 分钟 → 保存 → 等下一拍（最多 5 分钟）✓
 

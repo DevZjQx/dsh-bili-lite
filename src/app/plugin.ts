@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from '../lib/http.ts'
+import { probeModel } from '../lib/model-ready.ts'
 import { CFG_FILE } from '../config/paths.ts'
 import { startPulse } from '../features/bili-pulse/feature.ts'
 import type { PulseApi } from '../features/bili-pulse/feature.ts'
@@ -81,9 +82,19 @@ export default {
     }
 
     // ── 心跳：先起（/api/status 由它自己注册；起不来 → 这里兜底一条「未启动」）──
+    // probeReady：没有 API 凭证 / 没有可用模型时不投拍 —— 否则每拍都会以
+    // MISSING_CREDENTIAL 失败。探针只读 llm 目录（listModels 本身是凭证门控的）。
     let pulse: PulseApi | null = null
     try {
-      pulse = startPulse({ getSession: sessionController, route, cliPath: CLI_PATH })
+      pulse = startPulse({
+        getSession: sessionController,
+        route,
+        cliPath: CLI_PATH,
+        probeReady: async () => {
+          const readiness = await probeModel((name) => ctx.get(name))
+          return readiness.ok ? undefined : readiness.reason
+        },
+      })
     } catch (e) {
       try { console.warn('[bili-lite] 心跳启动失败：' + (e instanceof Error ? e.message : e)) } catch {}
       route('/dsh-bili-lite/api/status', async (_req, res) => { json(res, 200, { ok: true, pulse: { ok: false } }) })

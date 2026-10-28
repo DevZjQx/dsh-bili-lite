@@ -43,6 +43,21 @@ export interface ConnectionLike {
   requestRejection?(req: IncomingMessage): unknown
 }
 
+/** llm 服务的只读面：够判断「现在有没有能用的模型」即可 */
+export interface LlmProviderInfoLike { id: string; name: string }
+export interface LlmModelInfoLike { id: string }
+export interface LlmRuntimeLike {
+  listProviders(): LlmProviderInfoLike[]
+  /** 凭证门控：没有 API key / 未登录的 route 返回空（llm-deepseek / llm-pi-ai 都是这个契约） */
+  listModels(provider: string): Promise<ReadonlyArray<LlmModelInfoLike>>
+}
+
+/** 新会话默认用的模型选择（agentDefaultModel.currentSelection()） */
+export interface ModelSelectionLike { provider: string; model: string }
+export interface AgentDefaultModelLike {
+  currentSelection(): ModelSelectionLike | undefined
+}
+
 /** app 拿到的插件上下文（DSH 只保证这几个能力） */
 export interface PluginContext {
   get<T = unknown>(name: string): T | undefined
