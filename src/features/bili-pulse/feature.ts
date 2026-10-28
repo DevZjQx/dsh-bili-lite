@@ -38,6 +38,8 @@ export interface PulseStatus {
   everyMin: number
   beats: number
   lastBeatText: string | null
+  /** 最近一次投递失败的原因（成功投递后清空）—— 刚装好没投出去时，设置页 / 状态接口就看这里 */
+  lastError: string | null
   plan: PlanSummary
 }
 
@@ -48,6 +50,9 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   let beating = false
   let lastBeat = 0   // 0 = 还没拍过（启动后第一拍马上来）—— 兜底节拍的表；计划拍不受它管
   let beats = 0
+  let notReadyWarned = false   // 会话服务没就绪只提醒一次（DSH 刚启动/刚装插件时是常态，不算故障）
+  let lastError: string | null = null
+  let failCount = 0            // 连续失败次数：同样的原因不每分钟刷屏
 
   const everyMs = (cfg: Config): number => Math.max(1, Number(cfg.pulse?.everyMin) || DEFAULTS.pulse.everyMin) * 60_000
   /** 它的名字只来自配置（persona.name）—— 没配就不点名，插件里不写死任何名字 */
@@ -90,11 +95,24 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
     ].join('\n')
   }
 
-  async function deliver(text: string): Promise<void> {
-    const controller = getSession?.()
-    if (!controller || typeof controller.prompt !== 'function') throw new Error('sessionController 不可用')
-    try { await controller.create({ sessionId: SESSION_ID, cwd: WORK_DIR }) } catch { /* 会话已存在 → 沿用 ✓ */ }
-    await controller.prompt({ sessionId: SESSION_ID, mode: 'queue', content: [{ type: 'text', text }] })
+  /** 能用的会话服务：没有 / 形状不对 → undefined（DSH 还没把 sessionController 准备好） */
+  function controller(): SessionControllerLike | undefined {
+    const c = getSession?.()
+    return c && typeof c.prompt === 'function' ? c : undefined
+  }
+
+  async function deliver(c: SessionControllerLike, text: string): Promise<void> {
+    let createErr: unknown = null
+    try { await c.create({ sessionId: SESSION_ID, cwd: WORK_DIR }) } catch (e) {
+      createErr = e   // 多半是「会话已存在」，先记着；真投不出去时一并报出来，免得只剩一句没头没脑的 prompt 错误
+    }
+    try {
+      await c.prompt({ sessionId: SESSION_ID, mode: 'queue', content: [{ type: 'text', text }] })
+    } catch (e) {
+      const main = e instanceof Error ? e.message : String(e)
+      const extra = createErr ? `（create: ${createErr instanceof Error ? createErr.message : String(createErr)}）` : ''
+      throw new Error(main + extra)
+    }
   }
 
   async function tick(): Promise<void> {
@@ -102,25 +120,42 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
     beating = true
     try {
       const cfg = config()
-      // ① 计划拍优先：到点的（含重启后补投的）照投，投完记账 —— 计划非空时兜底暂停
       const due = dueEntries()
+      const fallback = !due.length && planSummary().pending === 0 && Date.now() - lastBeat >= everyMs(cfg)
+      if (!due.length && !fallback) return
+      // 会话服务没就绪（DSH 刚启动 / 刚装好插件）→ 不是故障，等下一拍；只提醒一次，不刷屏
+      const c = controller()
+      if (!c) {
+        if (!notReadyWarned) {
+          notReadyWarned = true
+          log('[bili-lite] 会话服务还没就绪（DSH 启动中或刚装好），暂不投拍，稍后自动重试')
+        }
+        return
+      }
       if (due.length) {
-        await deliver(planBeatText(due, cfg))
+        await deliver(c, planBeatText(due, cfg))
         markFired(due.map((e) => e.id))
         lastBeat = Date.now()
         beats++
+        lastError = null
+        failCount = 0
         log(`[bili-lite] 计划拍已投递（${due.map((e) => e.id).join(' ')}，第 ${beats} 拍）`)
         return
       }
-      // ② 兜底节拍：只在它没排任何计划时走 —— 有计划就信它的计划
-      if (planSummary().pending > 0) return
-      if (Date.now() - lastBeat < everyMs(cfg)) return
-      await deliver(beatText(cfg))
+      await deliver(c, beatText(cfg))
       lastBeat = Date.now()
       beats++
+      lastError = null
+      failCount = 0
       log(`[bili-lite] 心跳已投递（第 ${beats} 拍）`)
     } catch (e) {
-      log('[bili-lite] 拍投递失败，下一分钟再试：' + (e instanceof Error ? e.message : String(e)))   // 计划没记账 → 下一拍重投 ✓
+      const msg = e instanceof Error ? e.message : String(e)
+      failCount++
+      lastError = msg
+      // 同一原因只在第一次、以及每半小时提一次 —— 投不出去时别每分钟刷同样的行
+      if (failCount === 1 || failCount % 30 === 0) {
+        log(`[bili-lite] 拍投递失败（第 ${failCount} 次，下一分钟再试）：${msg}`)   // 计划没记账 → 下一拍重投 ✓
+      }
     } finally {
       beating = false
     }
@@ -140,6 +175,7 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
         everyMin: Math.max(1, Number(cfg.pulse?.everyMin) || DEFAULTS.pulse.everyMin),
         beats,
         lastBeatText: lastBeat ? new Date(lastBeat).toLocaleString('sv-SE') : null,
+        lastError,
         plan: planSummary(),
       }
     },

@@ -18,7 +18,7 @@ import { CFG_FILE } from '../config/paths.ts'
 import { startPulse } from '../features/bili-pulse/feature.ts'
 import type { PulseApi } from '../features/bili-pulse/feature.ts'
 import { registerSettings } from '../features/settings/feature.ts'
-import type { PluginContext, ConnectionLike, RouteHandler } from '../lib/dsh.ts'
+import type { PluginContext, ConnectionLike, RouteHandler, SessionControllerLike } from '../lib/dsh.ts'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI_PATH = path.join(HERE, '..', 'features', 'bili-agent', 'bili.js')
@@ -35,6 +35,10 @@ export default {
     }
     function connection(): ConnectionLike | undefined {
       return ctx.get<ConnectionLike>('connection') || ctx.connection
+    }
+    /** 会话服务同样两条路取：有的宿主只挂在 ctx.get 上，有的直接给 ctx 属性 */
+    function sessionController(): SessionControllerLike | undefined {
+      return ctx.get<SessionControllerLike>('sessionController') || ctx.sessionController
     }
     function isTrustedReq(req: IncomingMessage): boolean {
       if (isLoopbackReq(req)) return true
@@ -79,7 +83,7 @@ export default {
     // ── 心跳：先起（/api/status 由它自己注册；起不来 → 这里兜底一条「未启动」）──
     let pulse: PulseApi | null = null
     try {
-      pulse = startPulse({ getSession: () => ctx.sessionController, route, cliPath: CLI_PATH })
+      pulse = startPulse({ getSession: sessionController, route, cliPath: CLI_PATH })
     } catch (e) {
       try { console.warn('[bili-lite] 心跳启动失败：' + (e instanceof Error ? e.message : e)) } catch {}
       route('/dsh-bili-lite/api/status', async (_req, res) => { json(res, 200, { ok: true, pulse: { ok: false } }) })
