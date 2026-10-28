@@ -16,8 +16,17 @@ export type Route = (path: string, handler: RouteHandler) => void
 export interface WebServerLike { register(spec: RouteSpec): () => void }
 
 export interface SessionControllerLike {
-  create(opts: { sessionId: string; cwd?: string }): Promise<unknown>
-  prompt(opts: { sessionId: string; mode?: string; content: Array<{ type: 'text'; text: string }> }): Promise<unknown>
+  /**
+   * signal：宿主每次调用都会先 signal.throwIfAborted() —— 缺了就是
+   * 「Cannot read properties of undefined (reading 'throwIfAborted')」。
+   */
+  create(opts: { sessionId: string; cwd?: string; signal?: AbortSignal }): Promise<unknown>
+  prompt(opts: {
+    sessionId: string
+    mode?: string
+    content: Array<{ type: 'text'; text: string }>
+    signal?: AbortSignal
+  }): Promise<unknown>
 }
 
 export interface ConnectionLike {

@@ -78,15 +78,17 @@ catch { } } }) {
         return c && typeof c.prompt === 'function' ? c : undefined;
     }
     async function deliver(c, text) {
+        // 每次投递带一个不中止的 signal：宿主对 create / prompt 都会先 throwIfAborted，缺了就整拍失败
+        const signal = new AbortController().signal;
         let createErr = null;
         try {
-            await c.create({ sessionId: SESSION_ID, cwd: WORK_DIR });
+            await c.create({ sessionId: SESSION_ID, cwd: WORK_DIR, signal });
         }
         catch (e) {
             createErr = e; // 多半是「会话已存在」，先记着；真投不出去时一并报出来，免得只剩一句没头没脑的 prompt 错误
         }
         try {
-            await c.prompt({ sessionId: SESSION_ID, mode: 'queue', content: [{ type: 'text', text }] });
+            await c.prompt({ sessionId: SESSION_ID, mode: 'queue', content: [{ type: 'text', text }], signal });
         }
         catch (e) {
             const main = e instanceof Error ? e.message : String(e);
