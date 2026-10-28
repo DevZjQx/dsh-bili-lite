@@ -7,18 +7,51 @@
  *
  * 【结构例外（SKILL §10）】本文件必须单文件：DSH web 端的 __ModuleLoader__ 直接
  * 加载包导出 ./client 这一个文件（只提供 require("react")）。因此它不 import
- * 本 feature 的任何模块，feature.js 也不 import 它 —— 两半靠同一份 API 契约
+ * 本 feature 的任何模块，feature.ts 也不 import 它 —— 两半靠同一份 API 契约
  * （/dsh-bili-lite/api/*）与 config/store 的键清单对齐。
+ * 类型也是自带的：浏览器里没有 npm 的 @types/react，这里只声明用得到的那四个方法。
  */
-window.__ModuleLoader__.load({
+
+// ── 最小 React 契约（只用 createElement + 三个 hook；没有 JSX，构建后原样可用）──
+type CreateElement = (tag: string, props?: Record<string, unknown> | null, ...children: unknown[]) => unknown
+interface ReactLike {
+  createElement: CreateElement
+  useState: <T>(init: T) => [T, (next: T | ((prev: T) => T)) => void]
+  useCallback: <T extends (...args: never[]) => unknown>(fn: T, deps: readonly unknown[]) => T
+  useEffect: (fn: () => void | (() => void), deps?: readonly unknown[]) => void
+}
+interface ModuleLoader { load(spec: { id: string; factory: (require: (name: string) => ReactLike) => unknown }): void }
+
+// ── 与宿主对齐的数据形状（只列用到的字段）──────────────────────────────
+type SectionConfig = {
+  persona?: { name?: string }
+  self?: { mid?: string; name?: string }
+  [k: string]: unknown
+}
+interface CredState { present: boolean; hasSess: boolean; hasJct: boolean; hasBuvid: boolean }
+interface QrSession { key: string; img: string; status: string }
+interface PlanSummary { pending: number; nextDueText: string | null; nextWhenText: string | null }
+interface PulseStatus { ok: boolean; everyMin: number; beats: number; lastBeatText: string | null; plan: PlanSummary }
+interface StatusResp { ok?: boolean; pulse?: PulseStatus }
+interface SettingsResp { ok: boolean; error?: string; config: SectionConfig; credentials: CredState; warn?: string | null }
+interface QrStartResp { ok: boolean; error?: string; key: string; img: string }
+interface QrPollResp { ok: boolean; error?: string; status: string; detail?: string }
+interface DetailResp { ok: boolean; error?: string; detail?: string }
+interface SelftestResp { ok: boolean; error?: string; items?: Array<{ name: string; ok: boolean; detail: string }> }
+interface Field { group: string; path: string[]; label: string; hint: string; kind: 'text' }
+
+const loader = (window as unknown as { __ModuleLoader__: ModuleLoader }).__ModuleLoader__
+
+loader.load({
   id: "dsh-bili-lite",
   factory: (require) => {
-    const module = { exports: {} };
+    const module = { exports: {} as Record<string, unknown> };
     const exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
     const React = require("react");
-    const { createElement: h, useCallback, useEffect, useState } = React;
+    const h = React.createElement;
+    const { useCallback, useEffect, useState } = React;
 
     const API = "/dsh-bili-lite/api";
     const CSS = [
@@ -44,7 +77,7 @@ window.__ModuleLoader__.load({
     (() => { const tag = "bili-lite/section.css"; const old = document.getElementById(tag); if (old) old.remove(); const s = document.createElement("style"); s.id = tag; s.textContent = CSS; document.head.appendChild(s); })();
 
     // ── 字段清单（唯一真相：加字段只改这里 + 宿主白名单 ✓）─────────────────
-    const FIELDS = [
+    const FIELDS: Field[] = [
       { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）和日记抬头；留空就不点名。人设正文仍写 ~/.bili-lite/persona.md", kind: "text" },
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
       { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "默认 3；>3 看起来会像刷量 ✗", kind: "text" },
@@ -52,32 +85,39 @@ window.__ModuleLoader__.load({
       { group: "克制", path: ["risk", "minGapMs"], label: "请求间隔（毫秒）", hint: "默认 1200；连击是最容易被判机器人的特征 ✗", kind: "text" },
     ];
 
-    const get = (o, path) => path.reduce((a, k) => (a ?? {})[k], o);
-    const set = (o, path, v) => { const [k, ...rest] = path; if (!rest.length) { o[k] = v; return o } if (!o[k] || typeof o[k] !== "object") o[k] = {}; set(o[k], rest, v); return o };
-    const QR_STATUS = { waiting: "等待扫码…（手机 B 站 App → 扫一扫）", scanned: "已扫码 —— 请在手机上点「确认登录」", expired: "二维码已过期，重新点「显示二维码」", gone: "后台重启过，重新点「显示二维码」" };
+    const get = (o: unknown, path: string[]): unknown => path.reduce<unknown>((a, k) => (a as Record<string, unknown> | undefined)?.[k], o);
+    const set = (o: Record<string, unknown>, path: string[], v: unknown): Record<string, unknown> => {
+      const [k, ...rest] = path;
+      if (!rest.length) { o[k] = v; return o }
+      const cur = o[k];
+      if (!cur || typeof cur !== "object") o[k] = {};
+      set(o[k] as Record<string, unknown>, rest, v);
+      return o
+    };
+    const QR_STATUS: Record<string, string> = { waiting: "等待扫码…（手机 B 站 App → 扫一扫）", scanned: "已扫码 —— 请在手机上点「确认登录」", expired: "二维码已过期，重新点「显示二维码」", gone: "后台重启过，重新点「显示二维码」" };
 
     function BiliLiteSection() {
-      const [cfg, setCfg] = useState(null);
-      const [saved, setSaved] = useState(null);
+      const [cfg, setCfg] = useState<SectionConfig | null>(null);
+      const [saved, setSaved] = useState<string | null>(null);
       const [ck, setCk] = useState({ sessdata: "", bili_jct: "", buvid3: "" });
-      const [cred, setCred] = useState(null);
+      const [cred, setCred] = useState<CredState | null>(null);
       const [busy, setBusy] = useState("");
       const [err, setErr] = useState("");
       const [okMsg, setOkMsg] = useState("");
       const [out, setOut] = useState("");
-      const [status, setStatus] = useState(null);
-      const [qr, setQr] = useState(null); // { key, img, status } —— 扫码登录会话
+      const [status, setStatus] = useState<StatusResp | null>(null);
+      const [qr, setQr] = useState<QrSession | null>(null); // { key, img, status } —— 扫码登录会话
 
       const load = useCallback(async () => {
         setBusy("load"); setErr(""); setOkMsg("");
         try {
           const r = await fetch(`${API}/settings`, { headers: { accept: "application/json" } });
-          const d = await r.json();
+          const d = await r.json() as SettingsResp;
           if (!d.ok) throw new Error(d.error || "读取失败");
           setCfg(d.config); setSaved(JSON.stringify(d.config)); setCred(d.credentials);
-          const s = await fetch(`${API}/status`).then((x) => x.json()).catch(() => null);
+          const s = await fetch(`${API}/status`).then((x) => x.json() as Promise<StatusResp>).catch(() => null);
           setStatus(s);
-        } catch (e) { setErr(String(e.message || e)); }
+        } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, []);
       useEffect(() => { load() }, [load]);
@@ -87,12 +127,12 @@ window.__ModuleLoader__.load({
         try {
           const body = JSON.parse(JSON.stringify(cfg));
           const r = await fetch(`${API}/settings`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-          const d = await r.json();
+          const d = await r.json() as SettingsResp;
           if (!d.ok) throw new Error(d.error || "保存失败");
           setCfg(d.config); setSaved(JSON.stringify(d.config));
-          setOkMsg("✓ 已保存（心跳下一拍就按新节拍算）" + (d.warn ? "\n⚠️ " + d.warn : ""));
+          setOkMsg("✓ 已保存（心跳下一拍就按新节拍算）" + (d.warn ? "\\n⚠️ " + d.warn : ""));
           load();
-        } catch (e) { setErr(String(e.message || e)); }
+        } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, [cfg, load]);
 
@@ -100,10 +140,10 @@ window.__ModuleLoader__.load({
         setBusy("cookie"); setErr(""); setOkMsg("");
         try {
           const r = await fetch(`${API}/cookie`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ck) });
-          const d = await r.json();
+          const d = await r.json() as DetailResp;
           if (!d.ok) throw new Error(d.error || "写入失败");
           setOkMsg("✓ " + d.detail); setCk({ sessdata: "", bili_jct: "", buvid3: "" }); load();
-        } catch (e) { setErr(String(e.message || e)); }
+        } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, [ck, load]);
 
@@ -111,10 +151,10 @@ window.__ModuleLoader__.load({
         setBusy("qr"); setErr(""); setOkMsg("");
         try {
           const r = await fetch(`${API}/qr/start`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-          const d = await r.json();
+          const d = await r.json() as QrStartResp;
           if (!d.ok) throw new Error(d.error || "申请二维码失败");
           setQr({ key: d.key, img: d.img, status: "waiting" });
-        } catch (e) { setErr(String(e.message || e)); }
+        } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, []);
 
@@ -123,7 +163,7 @@ window.__ModuleLoader__.load({
         if (!qr || qr.status === "expired" || qr.status === "gone") return;
         const t = setInterval(async () => {
           try {
-            const d = await fetch(`${API}/qr/poll`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: qr.key }) }).then((x) => x.json());
+            const d = await fetch(`${API}/qr/poll`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: qr.key }) }).then((x) => x.json() as Promise<QrPollResp>);
             if (!d.ok) throw new Error(d.error || "查询失败");
             if (d.status === "done") { setQr(null); setOkMsg("✓ " + d.detail); load(); }
             else setQr((s) => (s && s.key === qr.key && s.status !== d.status ? { ...s, status: d.status } : s));
@@ -136,11 +176,11 @@ window.__ModuleLoader__.load({
         setBusy("selftest"); setErr(""); setOkMsg(""); setOut("");
         try {
           const r = await fetch(`${API}/selftest`);
-          const d = await r.json();
-          setOut(d.items ? d.items.map((it) => `${it.ok ? "✓" : "✗"} ${it.name}：${it.detail}`).join("\n") + (d.ok ? "\n\n══ 全部通过 ✓" : "\n\n══ 有 ✗，先照提示修") : "");
+          const d = await r.json() as SelftestResp;
+          setOut(d.items ? d.items.map((it) => `${it.ok ? "✓" : "✗"} ${it.name}：${it.detail}`).join("\\n") + (d.ok ? "\\n\\n══ 全部通过 ✓" : "\\n\\n══ 有 ✗，先照提示修") : "");
           if (!d.ok && d.error) setErr(d.error);
           load();
-        } catch (e) { setErr(String(e.message || e)); }
+        } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, [load]);
 
@@ -148,7 +188,7 @@ window.__ModuleLoader__.load({
 
       const dirty = saved && JSON.stringify(cfg) !== saved;
       const ci = { className: "bll-input", autoComplete: "off", spellCheck: false };
-      const up = (path, v) => setCfg((s) => set(JSON.parse(JSON.stringify(s)), path, v));
+      const up = (path: string[], v: unknown) => setCfg((s) => set(JSON.parse(JSON.stringify(s)) as Record<string, unknown>, path, v) as SectionConfig);
       const groups = [...new Set(FIELDS.map((f) => f.group))];
 
       const pulse = status?.pulse;
@@ -174,7 +214,7 @@ window.__ModuleLoader__.load({
               h("div", null,
                 h("div", { className: "bll-label" }, f.label),
                 h("div", { className: "bll-hint" }, f.hint)),
-              h("input", { ...ci, value: String(get(cfg, f.path) ?? ""), onChange: (e) => up(f.path, e.target.value) })))))),
+              h("input", { ...ci, value: String(get(cfg, f.path) ?? ""), onChange: (e: { target: { value: string } }) => up(f.path, e.target.value) })))))),
 
         h("div", { className: "bll-group" }, "B 站登录"),
         h("div", { className: "bll-row" },
@@ -191,9 +231,9 @@ window.__ModuleLoader__.load({
             h("div", { className: "bll-label" }, "凭据（备用：写入后永不回显）"),
             h("div", { className: "bll-hint" }, "手机不在手边时：浏览器 F12 → Application → Cookies → bilibili.com 手动复制（SESSDATA 是 HttpOnly，console 拿不到 ✗）")),
           h("div", { style: { display: "flex", flexDirection: "column", gap: "8px", minWidth: "240px" } },
-            h("input", { ...ci, type: "password", placeholder: "SESSDATA", value: ck.sessdata, onChange: (e) => setCk((s) => ({ ...s, sessdata: e.target.value })) }),
-            h("input", { ...ci, type: "password", placeholder: "bili_jct", value: ck.bili_jct, onChange: (e) => setCk((s) => ({ ...s, bili_jct: e.target.value })) }),
-            h("input", { ...ci, type: "password", placeholder: "buvid3（可空）", value: ck.buvid3, onChange: (e) => setCk((s) => ({ ...s, buvid3: e.target.value })) }),
+            h("input", { ...ci, type: "password", placeholder: "SESSDATA", value: ck.sessdata, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, sessdata: e.target.value })) }),
+            h("input", { ...ci, type: "password", placeholder: "bili_jct", value: ck.bili_jct, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, bili_jct: e.target.value })) }),
+            h("input", { ...ci, type: "password", placeholder: "buvid3（可空）", value: ck.buvid3, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, buvid3: e.target.value })) }),
             h("button", { className: "bll-btn bll-btn2", onClick: saveCookie, disabled: !!busy || !ck.sessdata || !ck.bili_jct },
               busy === "cookie" ? "验证中…" : "写入凭据（先验证再保存）"))),
 
@@ -211,7 +251,7 @@ window.__ModuleLoader__.load({
     const inject = ["slots"];
     const NS = "bili-lite";
 
-    function apply(ctx) {
+    function apply(ctx: { effect: (fn: () => unknown, label?: string) => void; slots: { inject: (name: string, fn: () => unknown, label?: string) => unknown; register: (spec: Record<string, unknown>, component: unknown) => unknown } }): void {
       ctx.effect(
         () => ctx.slots.inject("settings.section", () =>
           ctx.slots.register(

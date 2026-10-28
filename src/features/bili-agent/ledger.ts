@@ -3,26 +3,46 @@
 // comment 与 watch 都记进来；日记里出现过的 BV 号也算「看过」。
 // ============================================================================
 import fs from 'node:fs'
-import { LEDGER_FILE, DIARY_FILE } from '../../config/paths.js'
-import { readJson, writeJson } from '../../lib/json-file.js'
+import { LEDGER_FILE, DIARY_FILE } from '../../config/paths.ts'
+import { readJson, writeJson } from '../../lib/json-file.ts'
 
-export const today = () => new Date().toLocaleDateString('sv-SE')
+export type LedgerType = 'comment' | 'interact' | 'watch'
 
-export function readLedger() { return readJson(LEDGER_FILE, { log: [] }) }
+/** 一条记录：type 决定哪些字段有意义（comment 用 bvid/note，interact 用 action/target，watch 用 bvid/up/title） */
+export interface LedgerEntry {
+  at: string
+  type: LedgerType
+  bvid?: string
+  /** interact 的判重键：BV 号或 uid:<mid> */
+  target?: string
+  /** interact 的动作：like / coin / follow */
+  action?: string
+  /** 取消类（取消赞 / 取关）：不占额度，也不参与判重 */
+  undo?: true
+  note?: string
+  up?: string
+  title?: string
+}
 
-export function ledgerAppend(entry) {
+export interface Ledger { log: LedgerEntry[] }
+
+export const today = (): string => new Date().toLocaleDateString('sv-SE')
+
+export function readLedger(): Ledger { return readJson<Ledger>(LEDGER_FILE, { log: [] }) }
+
+export function ledgerAppend(entry: Omit<LedgerEntry, 'at'>): void {
   const led = readLedger()
   led.log.push({ at: new Date().toISOString(), ...entry })
   if (led.log.length > 2000) led.log = led.log.slice(-1500)
   writeJson(LEDGER_FILE, led)
 }
 
-export function writesToday() {
+export function writesToday(): LedgerEntry[] {
   return readLedger().log.filter((x) => x.type === 'comment' && new Date(x.at).toLocaleDateString('sv-SE') === today())
 }
 
 /** 今天做过的互动（赞 / 币 / 关注）—— 取消类不算额度 */
-export function interactionsToday() {
+export function interactionsToday(): LedgerEntry[] {
   return readLedger().log.filter((x) => x.type === 'interact' && !x.undo
     && new Date(x.at).toLocaleDateString('sv-SE') === today())
 }
@@ -30,9 +50,9 @@ export function interactionsToday() {
 /** 同一个目标、同一种互动，days 天内做过没有 —— 看最后一条记录：
  *  最后一次是取消（undo）→ 现在没这个互动，不算；否则按时间判 days 天。
  *  这样「赞 → 取消 → 再赞」不会被 7 天前的旧赞卡死，取消也仍然是纠正、不是在刷。 */
-export function interactedWithin(target, action, days = 7) {
+export function interactedWithin(target: string, action: string, days = 7): boolean {
   const log = readLedger().log
-  let last = null
+  let last: LedgerEntry | null = null
   for (const x of log) {
     if (x.type === 'interact' && x.action === action && x.target === target) last = x
   }
@@ -40,13 +60,13 @@ export function interactedWithin(target, action, days = 7) {
   return Date.now() - new Date(last.at).getTime() < days * 86_400_000
 }
 
-export function commentedWithin(bvid, days = 7) {
+export function commentedWithin(bvid: string, days = 7): boolean {
   return readLedger().log.some((x) => x.type === 'comment' && x.bvid === bvid
     && Date.now() - new Date(x.at).getTime() < days * 86_400_000)
 }
 
-export function seenSet() {
-  const seen = new Set()
+export function seenSet(): Set<string> {
+  const seen = new Set<string>()
   const led = readLedger()
   for (const x of led.log) if (x.bvid) seen.add(x.bvid)
   try { for (const bv of fs.readFileSync(DIARY_FILE, 'utf8').matchAll(/\bBV[0-9A-Za-z]{10}\b/g)) seen.add(bv[0]) } catch {}

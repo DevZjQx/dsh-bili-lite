@@ -1,5 +1,7 @@
 # dsh-bili-lite 0.1.0
 
+> Bun + TypeScript：源码全是 `.ts`，Bun 直接跑 CLI，宿主半边编译成 `dist/` 的普通 ESM（DSH 用 Node 加载，无感）。
+>
 > 极简版「让 AI 自己运营 B 站」：给 DSH 装一个 B 站分身 —— 它**自己规划作息**：什么时候刷、
 > 看什么、看不看，全部它自己定；刷候选、真看懂（章节 + 字幕 + 弹幕热词 + 热评）、
 > 写日记；值得的发一条评论，真喜欢就点个赞 / 投个币 / 关注 UP。
@@ -13,7 +15,7 @@
 
 ## 它每天干什么
 
-- **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `node bili.mjs schedule add --daily 21:00 --label "晚刷"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
+- **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `bun bili.ts schedule add --daily 21:00 --label "晚刷"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
 - **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜，不给就热门里挑，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
 - **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
 - **写日记**：`~/.dsh/bili-lite-diary.md`，一天几段
@@ -34,10 +36,14 @@
 
 ## 装
 
-**前提**：Node 18+（插件用系统 node 跑 `src/features/bili-agent/bili.mjs`；找不到时可设 `DSH_NODE` 指向真实 node）。
+**前提**：**Bun ≥ 1.2**（CLI 由它直接跑 TypeScript；找不到时会退到 Node 18+，`$BUN` / `$DSH_NODE` 都能指定）。
+宿主那一半是 TypeScript 编译出来的 `dist/`（普通 ESM）—— DSH 照旧用 Node 加载，不需要它认识 TS。
 抽帧九宫格另需 **ffmpeg**（可选，见下文；不装只是少画面那一路）。
 
 ```bash
+# 0) 装依赖 + 编译一次（dist 不进仓库）
+bun install && bun run build
+
 # 1) 装插件（本地目录 / npm 都行）
 dsh plugin --profile desktop add "link:/path/to/dsh-bili-lite"
 
@@ -70,7 +76,7 @@ dsh plugin --profile desktop add "link:/path/to/dsh-bili-lite"
 ## 启动测试（装完立刻跑）
 
 ```bash
-node <插件目录>/src/features/bili-agent/bili.mjs selftest
+bun <插件目录>/src/features/bili-agent/bili.ts selftest
 ```
 
 最后两行是新手最常卡的地方：
@@ -79,7 +85,7 @@ node <插件目录>/src/features/bili-agent/bili.mjs selftest
 |---|---|
 | 「装完了，但找不到它」 | 它的会话在**工作区 → 未分组**里，不点开看不见 ✗ |
 | 「找到了，但什么都不干」 | 新会话默认没有完全权限 ✗ 给它 `danger-full-access` ✓ |
-| 「cookie 填了还是未登录」 | 用了 `document.cookie` ✗ 必须 F12 手动复制 ✓（或者干脆 `node bili.mjs login` 扫码 ✓） |
+| 「cookie 填了还是未登录」 | 用了 `document.cookie` ✗ 必须 F12 手动复制 ✓（或者干脆 `bun bili.ts login` 扫码 ✓） |
 
 想立刻看它跑一轮：把心跳间隔改成 5 分钟 → 保存 → 等下一拍（最多 5 分钟）✓
 
@@ -88,19 +94,19 @@ node <插件目录>/src/features/bili-agent/bili.mjs selftest
 心跳文案里注入的是本工具的**绝对路径**；下面的相对路径以插件目录为基准：
 
 ```
-node src/features/bili-agent/bili.mjs login         # 扫码登录（免手抄 cookie）
-node src/features/bili-agent/bili.mjs selftest       # 启动自检
-node src/features/bili-agent/bili.mjs whoami         # cookie 是哪个号
-node src/features/bili-agent/bili.mjs feed [--n 5] [--kw 词,词]   # 今天的候选（只读；搜什么自己定）
-node src/features/bili-agent/bili.mjs video <BV>     # 看懂一条：章节/字幕试读/弹幕热词/热评（只读）
-node src/features/bili-agent/bili.mjs video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
-node src/features/bili-agent/bili.mjs shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
-node src/features/bili-agent/bili.mjs comment <BV> --message "…" --dry|--go
-node src/features/bili-agent/bili.mjs interact <BV|UID> --like|--coin [1|2]|--follow [--undo] --dry|--go
+bun src/features/bili-agent/bili.ts login         # 扫码登录（免手抄 cookie）
+bun src/features/bili-agent/bili.ts selftest       # 启动自检
+bun src/features/bili-agent/bili.ts whoami         # cookie 是哪个号
+bun src/features/bili-agent/bili.ts feed [--n 5] [--kw 词,词]   # 今天的候选（只读；搜什么自己定）
+bun src/features/bili-agent/bili.ts video <BV>     # 看懂一条：章节/字幕试读/弹幕热词/热评（只读）
+bun src/features/bili-agent/bili.ts video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
+bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
+bun src/features/bili-agent/bili.ts comment <BV> --message "…" --dry|--go
+bun src/features/bili-agent/bili.ts interact <BV|UID> --like|--coin [1|2]|--follow [--undo] --dry|--go
                                                      # 点赞 / 投币 / 关注（一次一件；--undo 取消赞、取关）
-node src/features/bili-agent/bili.mjs diary <text…>  # 写日记 / diary show 看
-node src/features/bili-agent/bili.mjs ledger         # 今天的额度账本
-node src/features/bili-agent/bili.mjs taste [--days 30]  # 口味回顾：看过的 / 常看的 UP / 动过手的（只读）
+bun src/features/bili-agent/bili.ts diary <text…>  # 写日记 / diary show 看
+bun src/features/bili-agent/bili.ts ledger         # 今天的额度账本
+bun src/features/bili-agent/bili.ts taste [--days 30]  # 口味回顾：看过的 / 常看的 UP / 动过手的（只读）
 ```
 
 ## 抽帧九宫格（可选，要 ffmpeg）
@@ -108,8 +114,8 @@ node src/features/bili-agent/bili.mjs taste [--days 30]  # 口味回顾：看过
 字幕/弹幕/热评都说不到「画面上是什么」时，让它自己看一眼：
 
 ```bash
-node src/features/bili-agent/bili.mjs shots <BV>                     # 3×3 等间隔 9 帧，拼一张图
-node src/features/bili-agent/bili.mjs shots <BV> --grid 4x4 --p 2    # 更细 / 换一 P
+bun src/features/bili-agent/bili.ts shots <BV>                     # 3×3 等间隔 9 帧，拼一张图
+bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / 换一 P
 ```
 
 输出落在 `~/.bili-lite/shots/<BV>-<时间>-3x3.jpg`，把路径交给看图工具读一眼即可。
@@ -142,31 +148,40 @@ node src/features/bili-agent/bili.mjs shots <BV> --grid 4x4 --p 2    # 更细 / 
 | `~/.dsh/bili-lite-diary.md` | 日记 |
 | `~/.dsh/bili-lite-work/` | 它的专用会话工作目录 |
 
+## 开发（Bun + TypeScript）
+
+- 源码全是 `.ts`（`src/` 与 `scripts/`），仓库里**没有 JS 源文件**；跑和装都走 Bun（`bun.lock` 锁版本）。
+- 宿主半边要编译：`bun run build` → `dist/`（tsc 1:1 产出，`main` / `exports` 都指向 dist）。构建最后一步 `scripts/postbuild.ts`
+  会去掉浏览器半边 `client.js` 里 tsc 自动补的 `export {}`：那个文件由 DSH 的 `__ModuleLoader__` 当普通脚本加载，不是 ES 模块。
+- CLI 不必编译也能跑：`bun src/features/bili-agent/bili.ts selftest`（Bun 直接吃 TS）；插件 spawn 的是 dist 里的那份。
+- 常用：`bun run typecheck`（tsc --noEmit）· `bun run check`（类型 + 构建 + 结构）· `bun run cli`（等于跑 CLI）。
+
 ## 项目结构（防弹边界）
 
 三个运行面，一个方向：**共享（config, lib）→ features → app**，不可逆。每个 feature 只有一个公共入口，删除任何一个 feature 只会破坏 `src/app` 的组合点。
 
 ```
 src/
-├── app/plugin.js                # 应用层：插件装配、信任柵栏、路由门（唯一组合点）
+├── app/plugin.ts                # 应用层：插件装配、信任柵栏、路由门（唯一组合点）
 ├── config/                      # 共享：路径常量 + 配置默认值（唯一真相）
-│   ├── paths.js
-│   └── store.js
+│   ├── paths.ts
+│   └── store.ts
 ├── lib/                         # 共享：B 站 HTTP 客户端（节流/焸断/WBI/扫码登录）+ 二维码编码器 + 小工具
-│   ├── bilibili.js
-│   ├── qrcode.js
-│   ├── ffmpeg.js                # 抽帧的可选依赖：定位/调用/体检（没装就只 shots 用不了）
-│   ├── json-file.js
-│   └── http.js
+│   ├── bilibili.ts
+│   ├── qrcode.ts
+│   ├── ffmpeg.ts                # 抽帧的可选依赖：定位/调用/体检（没装就只 shots 用不了）
+│   ├── json-file.ts
+│   ├── http.ts
+│   └── dsh.ts                   # DSH 宿主契约（纯类型，编译后是空模块）
 └── features/
     ├── settings/                # 设置壳：宿主 API + 浏览器 section（docs/features/settings.md）
     ├── bili-pulse/              # 心跳：照它排的作息投拍，没排作息时兜底问一拍（docs/features/bili-pulse.md）
     └── bili-agent/              # agent CLI：看/评/日记/账本（docs/features/bili-agent.md）
 ```
 
-- 每个 feature 一个入口：`feature.js`（CLI 按框架约定是 `bili.mjs`）；`settings/client.js` 是单文件加载的浏览器半边（零 import）。
+- 每个 feature 一个入口：`feature.ts`（CLI 按框架约定是 `bili.ts`）；`settings/client.ts` 是单文件加载的浏览器半边（零 import）。
 - 跨 feature 不直接 import：心跳每拍重新读配置 —— 没有需要注入的回调 ✓。
-- `npm run check` 跑结构检查：方向不可逆、无 barrel、浏览器半边零 import、全量语法检查。feature 的边界决策见 `docs/features/*.md`。
+- `bun run check` = 类型检查 + 构建 + 结构检查（方向不可逆、无 barrel、浏览器半边零 import）。feature 的边界决策见 `docs/features/*.md`。
 
 ## 和 dsh-bili-whale 的关系
 

@@ -4,24 +4,27 @@
  *   · credState —— 只回「能不能用」，不回显任何凭据内容
  */
 import fs from 'node:fs'
-import { CRED_FILE } from '../../config/paths.js'
+import { CRED_FILE } from '../../config/paths.ts'
+import type { Cred } from '../../lib/bilibili.ts'
+
+export interface CredState { present: boolean; hasSess: boolean; hasJct: boolean; hasBuvid: boolean }
 
 /** 只回「能不能用」，不回显任何凭据内容 */
-export function credState() {
+export function credState(): CredState {
   try {
-    const c = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8'))
+    const c = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8')) as Partial<Cred>
     return { present: true, hasSess: !!c.sessdata, hasJct: !!c.bili_jct, hasBuvid: !!c.buvid3 }
   } catch { return { present: false, hasSess: false, hasJct: false, hasBuvid: false } }
 }
 
-export function parseCookie(input = {}) {
-  const pick = (raw, key) => {
+export function parseCookie(input: Record<string, unknown> = {}): Cred {
+  const pick = (raw: unknown, key: string): string => {
     const value = String(raw ?? '').trim()
     const m = value.match(new RegExp('(?:^|;)\\s*' + key + '=([^;]+)', 'i'))
     return (m ? m[1] : value.replace(new RegExp('^' + key + '\\s*=', 'i'), ''))
       .replace(/^["'\s]+|["';\s]+$/g, '').trim()
   }
-  const cred = {
+  const cred: Cred = {
     sessdata: pick(input.sessdata, 'SESSDATA'),
     bili_jct: pick(input.bili_jct, 'bili_jct'),
     buvid3: pick(input.buvid3, 'buvid3'),

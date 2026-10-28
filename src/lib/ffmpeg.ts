@@ -8,18 +8,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import type { SpawnSyncReturns } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { DATA_DIR } from '../config/paths.js'
+import { DATA_DIR } from '../config/paths.ts'
 
 const EXE = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
-const isFile = (f) => {
+const isFile = (f: string | null | undefined): f is string => {
   if (!f) return false
   try { return fs.statSync(f).isFile() } catch { return false }
 }
 
-function onPath() {
+function onPath(): string | null {
   for (const d of String(process.env.PATH ?? '').split(path.delimiter)) {
     if (!d) continue
     const f = path.join(d, EXE)
@@ -29,25 +30,27 @@ function onPath() {
 }
 
 /** ffmpeg 在哪（找不到 = null）。顺序：$FFMPEG → PATH → 仓库 bin/ → ~/.bili-lite/bin/ */
-export function ffmpegPath() {
+export function ffmpegPath(): string | null {
   return [process.env.FFMPEG, onPath(), path.join(ROOT, 'bin', EXE), path.join(DATA_DIR, 'bin', EXE)]
     .find(isFile) ?? null
 }
 
+export interface FfmpegInfo { ok: boolean; path: string | null; version: string | null }
+
 /** 要路径，没有就抛「怎么办」（不是 ENOENT） */
-export function requireFfmpeg() {
+export function requireFfmpeg(): string {
   const p = ffmpegPath()
   if (p) return p
   throw new Error([
     '找不到 ffmpeg —— 只有「抽帧九宫格」要它，其余功能照常用。装一个或指个路径即可：',
     '  ① 装进 PATH：winget install ffmpeg（Windows）/ brew install ffmpeg（macOS）/ apt install ffmpeg（Linux）',
-    `  ② 用环境变量指定：FFMPEG=/绝对/路径/ffmpeg`,
+    '  ② 用环境变量指定：FFMPEG=/绝对/路径/ffmpeg',
     `  ③ 或者把它放到 ${path.join(DATA_DIR, 'bin', EXE)}`,
   ].join('\n'))
 }
 
 /** 体检（selftest 用）：能跑起来才算 ok */
-export function ffmpegInfo() {
+export function ffmpegInfo(): FfmpegInfo {
   const bin = ffmpegPath()
   if (!bin) return { ok: false, path: null, version: null }
   const r = spawnSync(bin, ['-hide_banner', '-version'], { encoding: 'utf8', timeout: 10_000 })
@@ -56,9 +59,9 @@ export function ffmpegInfo() {
 }
 
 /** 跑一次 ffmpeg：非零退出/超时都抛人话（stderr 只留最后两行，别糊屏） */
-export function runFfmpeg(bin, args, { timeout = 120_000 } = {}) {
+export function runFfmpeg(bin: string, args: string[], { timeout = 120_000 }: { timeout?: number } = {}): SpawnSyncReturns<string> {
   const r = spawnSync(bin, args, { encoding: 'utf8', timeout, maxBuffer: 4 * 1024 * 1024 })
-  if (r.error?.code === 'ETIMEDOUT' || r.signal) throw new Error(`ffmpeg 超时（${Math.round(timeout / 1000)}s）—— 视频太长或网络太慢，换个时间再抽`)
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' || r.signal) throw new Error(`ffmpeg 超时（${Math.round(timeout / 1000)}s）—— 视频太长或网络太慢，换个时间再抽`)
   if (r.status !== 0) {
     const tail = String(r.stderr ?? r.error?.message ?? '').trim().split('\n').slice(-2).join(' ').slice(0, 240)
     throw new Error(`ffmpeg 失败：${tail || '退出码 ' + r.status}`)

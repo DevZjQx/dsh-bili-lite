@@ -5,44 +5,55 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { config, writeConfig, DEFAULTS } from '../../config/store.js'
-import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js'
-import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js'
-import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js'
-import { qrMatrix, qrTerminal } from '../../lib/qrcode.js'
-import { writesToday, interactionsToday, interactedWithin, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js'
-import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN } from '../../lib/schedule.js'
+import { config, writeConfig, DEFAULTS } from '../../config/store.ts'
+import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.ts'
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.ts'
+import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.ts'
+import { qrMatrix, qrTerminal } from '../../lib/qrcode.ts'
+import { writesToday, interactionsToday, interactedWithin, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.ts'
+import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN } from '../../lib/schedule.ts'
+import type { Cred, VideoView, VideoPage, NavResp, ViewResp, ApiEnvelope, SubtitleItem } from '../../lib/bilibili.ts'
 
 // ── 小工具 ─────────────────────────────────────────────────────────────────
-const fmtNum = (n) => Number(n) >= 10000 ? (Number(n) / 10000).toFixed(1) + '万' : String(n ?? 0)
-const fmtDur = (s) => { const m = Math.floor(Number(s) / 60); return `${String(m).padStart(2, '0')}:${String(Math.floor(Number(s) % 60)).padStart(2, '0')}` }
+const fmtNum = (n: number | string | undefined | null): string => Number(n) >= 10000 ? (Number(n) / 10000).toFixed(1) + '万' : String(n ?? 0)
+const fmtDur = (s: number | string | undefined | null): string => { const m = Math.floor(Number(s) / 60); return `${String(m).padStart(2, '0')}:${String(Math.floor(Number(s) % 60)).padStart(2, '0')}` }
 /** 时长容错：搜索接口给 "HH:MM:SS" / "MM:SS" / 秒数，都归一成 MM:SS */
-const durText = (d) => {
+const durText = (d: number | string | undefined | null): string => {
   const s = String(d ?? '')
   const parts = s.split(':').map(Number)
   if (parts.length >= 2 && parts.every((x) => Number.isFinite(x))) return fmtDur(parts.reduce((a, b) => a * 60 + b, 0))
   return fmtDur(Number(s) || 0)
 }
 const BV_RE = /^BV[0-9A-Za-z]{10}$/
+type Flags = Map<string, string | true>
+
+/** feed 的候选（搜出来的 / 热门补的，字段来源不同所以都可空） */
+interface Candidate { bvid?: string; title?: string; up?: string; play?: number | string; duration?: number | string; why: string }
+interface SearchItem { bvid?: string; title?: string; author?: string; play?: number; duration?: number | string }
+interface PopularItem { bvid?: string; cid?: number; title?: string; owner?: { name?: string }; stat?: { view?: number }; duration?: number | string }
+interface ReplyItem { like?: number; member?: { uname?: string }; content?: { message?: string }; count?: number }
+
+/** catch 里的 unknown → 人话（CLI 只给人看，不吞异常类型） */
+const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 /** "90" / "1:30" / "1:02:03" → 秒；非数字 → NaN（让调用方报用法，不静默当 0） */
-const toSec = (s) => String(s).trim().split(':').reduce((a, x) => { const n = Number(x); return Number.isFinite(n) ? a * 60 + n : NaN }, 0)
+const toSec = (s: string): number => String(s).trim().split(':').reduce((a, x) => { const n = Number(x); return Number.isFinite(n) ? a * 60 + n : NaN }, 0)
 /** 逐句字幕拼成可读的流水：CJK 边界不加空格，英文边界加 */
-const flowText = (texts) => texts.reduce((acc, t) => {
+const flowText = (texts: string[]): string => texts.reduce((acc, t) => {
   if (!acc) return t
   const cjk = /[\u4e00-\u9fff，。！？、；：…）》」』％]$/.test(acc.slice(-1)) || /^[\u4e00-\u9fff，。！？、；：…（《「『]/.test(t)
   return acc + (cjk ? '' : ' ') + t
 }, '')
 /** 字幕种类标签：ai- 开头的是 AI 生成，其余是 UP 自己配的 CC */
-const subKind = (sub) => String(sub?.lan ?? '').startsWith('ai-') ? 'AI 生成' : 'UP 配'
+const subKind = (sub: SubtitleItem | null | undefined): string => String(sub?.lan ?? '').startsWith('ai-') ? 'AI 生成' : 'UP 配'
 
-async function getView(bvid, cred) {
-  const j = await apiGet(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { cred, ttlMs: 24 * 3600_000 })
+async function getView(bvid: string, cred: Cred): Promise<VideoView> {
+  const j = await apiGet<ViewResp>(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { cred, ttlMs: 24 * 3600_000 })
   if (j.code !== 0) throw new Error(`查不到视频 ${bvid}：${explainCode(j.code)}${j.message ? '（' + j.message + '）' : ''}`)
-  return j.data
+  return j.data ?? {}
 }
 
-export const HELP = `用法: node bili.mjs <命令> [参数…]
+export const HELP = `用法: bun bili.ts <命令> [参数…]
 命令：
   selftest                启动自检（装完先跑这个）
   login                   扫码登录（手机 B 站 App 扫码，免手抄 cookie）
@@ -72,47 +83,48 @@ export const HELP = `用法: node bili.mjs <命令> [参数…]
     同一视频 7 天内同一种评论/互动只做一次（取消类不占额度）
   · 撞 412/风控码自动熔断 5–30 分钟；凭据永不回显`
 
-export async function cmdSelftest(asJson) {
-  const items = []
-  const add = (name, ok, detail) => items.push({ name, ok: !!ok, detail })
+export async function cmdSelftest(asJson: boolean): Promise<void> {
+  const items: Array<{ name: string; ok: boolean; detail: string }> = []
+  const add = (name: string, ok: unknown, detail: string): void => { items.push({ name, ok: !!ok, detail }) }
   const [major] = String(process.version).slice(1).split('.')
-  add('Node 版本', Number(major) >= 18, `${process.version}${Number(major) >= 18 ? '' : ' —— 需要 18+（fetch/AbortSignal）'}`)
+  const bunVer = (process.versions as Record<string, string | undefined>).bun
+  add('运行时', Number(major) >= 18, `${bunVer ? 'Bun ' + bunVer : 'Node ' + process.version}${Number(major) >= 18 ? '' : ' —— 需要 18+（fetch/AbortSignal）'}`)
   add('配置文件', true, `${CFG_FILE}${fs.existsSync(CFG_FILE) ? '' : '（还没写过，用默认值 ✓）'}`)
-  let cred = null
+  let cred: Cred | null = null
   try {
     cred = loadCred()
-    const miss = ['sessdata', 'bili_jct'].filter((k) => !cred[k])
+    const miss = (['sessdata', 'bili_jct'] as const).filter((k) => !cred?.[k])
     add('凭据', !miss.length, miss.length ? `缺 ${miss.join(', ')} —— 去设置页粘贴 cookie` : `${CRED_FILE}（三个字段齐 ✓）`)
-  } catch (e) { add('凭据', false, e.message) }
+  } catch (e) { add('凭据', false, errMsg(e)) }
   if (cred) {
     try {
-      const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+      const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
       const login = nav.code === 0 && nav.data?.isLogin === true
-      add('登录态', login, login ? `已登录：${nav.data.uname}（mid ${nav.data.mid}）` : `${explainCode(nav.code)} —— cookie 失效，重抄一次`)
+      add('登录态', login, login ? `已登录：${nav.data!.uname}（mid ${nav.data!.mid}）` : `${explainCode(nav.code)} —— cookie 失效，重抄一次`)
       add('WBI 密钥', !!nav.data?.wbi_img?.img_url, nav.data?.wbi_img ? '搜索可用 ✓' : 'nav 未返回 wbi_img，搜索不可用')
       if (login) {
         const cur = config()
-        if (String(cur.self?.mid ?? '') !== String(nav.data.mid)) {
-          try { fs.mkdirSync(path.dirname(CFG_FILE), { recursive: true }); fs.writeFileSync(CFG_FILE, JSON.stringify({ ...cur, self: { mid: String(nav.data.mid), name: String(nav.data.uname ?? '') } }, null, 2) + '\n') } catch {}
+        if (String(cur.self?.mid ?? '') !== String(nav.data!.mid)) {
+          try { fs.mkdirSync(path.dirname(CFG_FILE), { recursive: true }); fs.writeFileSync(CFG_FILE, JSON.stringify({ ...cur, self: { mid: String(nav.data!.mid), name: String(nav.data!.uname ?? '') } }, null, 2) + '\n') } catch {}
         }
       }
       // 字幕/章节接口可达性（player v2 要 WBI 签名；AI 字幕列表要登录态才返回）——
       // 让「看不懂」在装完当天就暴露，而不是某天 video 命令静默降级
       try {
-        const pop = await apiGet('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20', { cred, ttlMs: 10 * 60_000 })
+        const pop = await apiGet<ApiEnvelope<{ list?: PopularItem[] }>>('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20', { cred, ttlMs: 10 * 60_000 })
         const s = (pop.data?.list ?? []).find((x) => x.bvid && x.cid)
         if (!s) throw new Error('热门列表拿不到样本视频，跳过')
-        const info = await getPlayerInfo(s.bvid, s.cid, cred)
+        const info = await getPlayerInfo(String(s.bvid), Number(s.cid), cred)
         const n = info.subtitle?.subtitles?.length ?? 0
         add('字幕接口', true, `可达 ✓（样本${n ? `带 ${n} 条字幕` : '样本无字幕'}${info.need_login_subtitle && !login ? '；AI 字幕需登录' : ''}）`)
-      } catch (e) { add('字幕接口', false, e.message) }
-    } catch (e) { add('登录态', false, e.message) }
+      } catch (e) { add('字幕接口', false, errMsg(e)) }
+    } catch (e) { add('登录态', false, errMsg(e)) }
   }
   // 抽帧是可选能力：装了 ffmpeg 才有画面那一路，没装不算失败（其余功能不依赖它）
   {
     const ff = ffmpegInfo()
     add('抽帧 ffmpeg（可选）', true, ff.ok
-      ? `${ff.version.split(' Copyright')[0]} —— shots 可用 ✓`
+      ? `${(ff.version ?? '').split(' Copyright')[0]} —— shots 可用 ✓`
       : '没装 —— 只有「抽帧九宫格」（shots）用得到；装：winget/brew/apt install ffmpeg，或用 $FFMPEG 指路径')
   }
   try {
@@ -120,7 +132,7 @@ export async function cmdSelftest(asJson) {
     const probe = path.join(DATA_DIR, '.write-probe')
     fs.writeFileSync(probe, 'ok'); fs.rmSync(probe)
     add('数据目录', true, `${DATA_DIR} 可写 ✓`)
-  } catch (e) { add('数据目录', false, `${DATA_DIR} 写不进去：${e.message}`) }
+  } catch (e) { add('数据目录', false, `${DATA_DIR} 写不进去：${errMsg(e)}`) }
   try {
     fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true })
     if (!fs.existsSync(DIARY_FILE)) {
@@ -128,13 +140,13 @@ export async function cmdSelftest(asJson) {
       fs.writeFileSync(DIARY_FILE, `# ${nm ? nm + '的' : ''}日记\n\n`)
     }
     add('日记', true, `${DIARY_FILE} ✓`)
-  } catch (e) { add('日记', false, `${DIARY_FILE}：${e.message}`) }
+  } catch (e) { add('日记', false, `${DIARY_FILE}：${errMsg(e)}`) }
   add('心跳', true, `兜底节拍每 ${Number(config().pulse?.everyMin) || 60} 分钟一拍 —— 只在它没排计划时走；排了计划（schedule add）宿主只按它的计划投拍 ✓`)
   try {
     const p = readPlan()
     const sum = planSummary()
     add('计划文件', true, `${SCHEDULE_FILE}${p.entries.length ? `（在排 ${p.entries.length}/${MAX_PENDING} 条，下一次：${sum.nextDueText} ${sum.nextWhenText}）` : '（还没排 —— 排不排它自己定 ✓）'}；--every 最短 ${MIN_EVERY_MIN} 分钟`)
-  } catch (e) { add('计划文件', false, e.message) }
+  } catch (e) { add('计划文件', false, errMsg(e)) }
 
   const ok = items.every((x) => x.ok)
   if (asJson) { console.log(JSON.stringify({ ok, node: process.version, items }, null, 2)); process.exit(ok ? 0 : 1) }
@@ -148,7 +160,7 @@ export async function cmdSelftest(asJson) {
 }
 
 // ── 扫码登录：终端出二维码 → 轮询到确认 → 真实验证后落盘（免手抄 cookie 的入口）────────
-export async function cmdLogin() {
+export async function cmdLogin(): Promise<void> {
   for (let round = 1; ; round += 1) {
     if (round > 3) throw new Error('连续 3 张二维码都过期了 —— 手机扫码不成功时，去设置页手动粘贴 cookie 兜底')
     const g = await qrGenerate()
@@ -174,43 +186,43 @@ export async function cmdLogin() {
   }
 }
 
-export async function cmdWhoami() {
+export async function cmdWhoami(): Promise<void> {
   const cred = loadCred()
-  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
   if (nav.code !== 0 || nav.data?.isLogin !== true) { console.error(`✗ 未登录：${explainCode(nav.code)}`); process.exit(4) }
-  console.log(`账号: ${nav.data.uname}   (mid ${nav.data.mid})`)
-  console.log(`硬币 ${nav.data.money ?? '?'}   等级 ${nav.data.level_info?.current_level ?? '?'}`)
+  console.log(`账号: ${nav.data!.uname}   (mid ${nav.data!.mid})`)
+  console.log(`硬币 ${nav.data!.money ?? '?'}   等级 ${nav.data!.level_info?.current_level ?? '?'}`)
   console.log('⚠️ 这是与 AI 共用的账号：它发的每条评论都会以这个身份公开出现 —— 确认是主人授权的号')
 }
 
-export async function cmdFeed(flags) {
+export async function cmdFeed(flags: Flags): Promise<void> {
   const n = Math.min(10, Math.max(1, Number(flags.get('n') ?? 5)))
   // 口味不存配置：想搜什么由它此刻自己定（--kw，逗号分隔，最多 3 个）；不给就只拿热门当候选，
   // 喜不喜欢全在它自己脑子里 —— 看标题挑，不用谁预先告诉它「爱看 / 不爱看」什么。
   const keywords = String(flags.get('kw') ?? '').split(/[,，、;；]+/).map((s) => s.trim()).filter(Boolean).slice(0, 3)
   const cred = loadCred()
   const seen = seenSet()
-  const pool = []
-  const push = (v) => { if (BV_RE.test(v.bvid ?? '') && !seen.has(v.bvid) && !pool.some((x) => x.bvid === v.bvid)) pool.push(v) }
+  const pool: Candidate[] = []
+  const push = (v: Candidate): void => { if (BV_RE.test(v.bvid ?? '') && !seen.has(v.bvid ?? '') && !pool.some((x) => x.bvid === v.bvid)) pool.push(v) }
 
   // ① 自己给的关键词搜（不给就跳过）
   for (const kw of keywords) {
     try {
       const qs = await wbi({ search_type: 'video', keyword: kw.slice(0, 40), page: 1 }, cred)
-      const j = await apiGet(`https://api.bilibili.com/x/web-interface/wbi/search/type?${qs}`, { cred, referer: 'https://search.bilibili.com/' })
+      const j = await apiGet<ApiEnvelope<{ result?: SearchItem[] }>>(`https://api.bilibili.com/x/web-interface/wbi/search/type?${qs}`, { cred, referer: 'https://search.bilibili.com/' })
       for (const r of j.data?.result ?? []) push({
         bvid: r.bvid, title: String(r.title ?? '').replace(/<[^>]+>/g, ''),
         up: r.author, play: r.play, duration: r.duration, why: `搜「${kw}」`,
       })
-    } catch (e) { console.log(`（搜「${kw}」失败：${e.message}）`) }
+    } catch (e) { console.log(`（搜「${kw}」失败：${errMsg(e)}）`) }
     if (pool.length >= n * 3) break
   }
   // ② 不够就用热门补
   if (pool.length < n) {
     try {
-      const j = await apiGet('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20', { cred })
+      const j = await apiGet<ApiEnvelope<{ list?: PopularItem[] }>>('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20', { cred })
       for (const r of j.data?.list ?? []) push({ bvid: r.bvid, title: r.title, up: r.owner?.name, play: r.stat?.view, duration: fmtDur(r.duration), why: '热门' })
-    } catch (e) { console.log(`（热门列表失败：${e.message}）`) }
+    } catch (e) { console.log(`（热门列表失败：${errMsg(e)}）`) }
   }
   // ③ 只排除看过的；不预先排除任何题材 —— 要不要看它自己判断
   const picks = pool.slice(0, n)
@@ -220,13 +232,13 @@ export async function cmdFeed(flags) {
     console.log(`\n[${i + 1}] ${v.bvid} —— ${v.title}`)
     console.log(`    ${v.up ?? '?'} · 播放 ${fmtNum(v.play)} · ${durText(v.duration)} · ${v.why}`)
   }
-  console.log('\n下一步：node bili.mjs video <BV> —— 看懂了再说话 ✓')
+  console.log('\n下一步：bun bili.ts video <BV> —— 看懂了再说话 ✓')
 }
 
-export async function cmdVideo(flags, positional) {
+export async function cmdVideo(flags: Flags, positional: string[]): Promise<void> {
   const bvid = String(positional[0] ?? '')
   const readArg = String(flags.get('read') ?? '').trim()
-  if (!BV_RE.test(bvid)) { console.error('用法: node bili.mjs video <BV号> [--read 全文|mm:ss-mm:ss]'); process.exit(2) }
+  if (!BV_RE.test(bvid)) { console.error('用法: bun bili.ts video <BV号> [--read 全文|mm:ss-mm:ss]'); process.exit(2) }
   const cred = loadCred()
   const v = await getView(bvid, cred)
   if (readArg) return readTranscript(bvid, v, cred, readArg)
@@ -237,7 +249,7 @@ export async function cmdVideo(flags, positional) {
   if (desc) console.log(`简介: ${desc.slice(0, 400)}${desc.length > 400 ? '…' : ''}`)
   // 内容四层：章节 → 字幕试读 → 弹幕热词 → 热评；读不花额度、不截断，深浅由 agent 自己定
   try {
-    const info = await getPlayerInfo(bvid, v.cid, cred)
+    const info = await getPlayerInfo(bvid, Number(v.cid), cred)
     const vp = Array.isArray(info.view_points) ? info.view_points : []
     if (vp.length) {
       console.log('--- 章节 ---')
@@ -252,20 +264,20 @@ export async function cmdVideo(flags, positional) {
       const cover = `${fmtDur(Math.round(lines[0].from))}–${fmtDur(Math.round(lines[lines.length - 1].to || lines[lines.length - 1].from))}`
       console.log(`--- 字幕（${subKind(sub)} · 全文 ${all.length} 字 · 覆盖 ${cover}）---`)
       console.log(`  ${all.slice(0, 500)}${all.length > 500 ? '…' : ''}`)
-      if (all.length > 500) console.log(`  ↳ 想细读哪段就 --read：node bili.mjs video ${bvid} --read 全文（或 --read 03:00-08:30）`)
+      if (all.length > 500) console.log(`  ↳ 想细读哪段就 --read：bun bili.ts video ${bvid} --read 全文（或 --read 03:00-08:30）`)
     }
-  } catch (e) { console.log(`（章节/字幕读取失败：${e.message}）`) }
+  } catch (e) { console.log(`（章节/字幕读取失败：${errMsg(e)}）`) }
   try {
-    const dm = await getDanmakuBrief(bvid, v.cid, cred)
+    const dm = await getDanmakuBrief(bvid, Number(v.cid), cred)
     if (dm.count > 0) {
       console.log('--- 弹幕 ---')
       const words = dm.top.map(([w, n]) => `${w}×${n}`).join(' ')
       console.log(`  共 ${fmtNum(dm.count)} 条${words ? ` · 热词：${words}` : ''}`)
       if (dm.dense) console.log(`  最热闹在 ${fmtDur(dm.dense.from)} 前后（那一分钟 ${dm.dense.n} 条 —— 精彩大概率在这）`)
     }
-  } catch (e) { console.log(`（弹幕读取失败：${e.message}）`) }
+  } catch (e) { console.log(`（弹幕读取失败：${errMsg(e)}）`) }
   try {
-    const j = await apiGet(`https://api.bilibili.com/x/v2/reply?type=1&oid=${v.aid}&sort=2&ps=10&pn=1`, { cred })
+    const j = await apiGet<ApiEnvelope<{ replies?: ReplyItem[] }>>(`https://api.bilibili.com/x/v2/reply?type=1&oid=${v.aid}&sort=2&ps=10&pn=1`, { cred })
     const replies = j.data?.replies ?? []
     if (replies.length) {
       console.log('--- 热评 ---')
@@ -274,12 +286,12 @@ export async function cmdVideo(flags, positional) {
         console.log(`  [+${fmtNum(r.like)}] ${r.member?.uname}: ${msg}${r.count ? `（${r.count} 回复）` : ''}`)
       }
     } else console.log('--- 没有评论 ---')
-  } catch (e) { console.log(`（热评读取失败：${e.message}）`) }
+  } catch (e) { console.log(`（热评读取失败：${errMsg(e)}）`) }
   ledgerAppend({ type: 'watch', bvid, up: v.owner?.name ? String(v.owner.name).slice(0, 40) : undefined, title: String(v.title).slice(0, 60) })
 }
 
 /** 深读：字幕正文，全文或按时间区间，绝不截断 —— 深浅是 agent 的事，读不设限（克制只管写） */
-async function readTranscript(bvid, v, cred, readArg) {
+async function readTranscript(bvid: string, v: VideoView, cred: Cred, readArg: string): Promise<void> {
   let from = 0, to = Infinity
   if (!/^(all|全文)$/i.test(readArg)) {
     const [a, b] = readArg.split(/\s*-\s*/)
@@ -289,7 +301,7 @@ async function readTranscript(bvid, v, cred, readArg) {
       console.error('用法: --read 全文 或 --read 03:00-08:30（也认秒数 --read 180-510）'); process.exit(2)
     }
   }
-  const info = await getPlayerInfo(bvid, v.cid, cred)
+  const info = await getPlayerInfo(bvid, Number(v.cid), cred)
   const sub = pickSubtitle(info)
   if (!sub) { console.log('（这条没有可用字幕 —— 概览里的简介/章节/弹幕/热评就是全部了）'); return }
   const lines = await getSubtitleLines(bvid, sub, cred)
@@ -302,11 +314,11 @@ async function readTranscript(bvid, v, cred, readArg) {
 // ── shots：抽帧九宫格（等间隔 N 帧拼一张图，补上「字幕之外」的画面）──────────────
 // 依赖 ffmpeg（可选）：直接把 B 站直链喂给它，按 `-ss` 远程 seek 各取一帧，最后 tile 拼图。
 // 不落整段视频 —— 长视频也只按需读几个字节范围，磁盘和内存都不受视频长度影响。
-const QN_TEXT = { 16: '360P', 32: '480P', 64: '720P', 74: '720P60', 80: '1080P', 112: '1080P+', 116: '1080P60', 120: '4K' }
+const QN_TEXT: Record<number, string> = { 16: '360P', 32: '480P', 64: '720P', 74: '720P60', 80: '1080P', 112: '1080P+', 116: '1080P60', 120: '4K' }
 
-export async function cmdShots(flags, positional) {
+export async function cmdShots(flags: Flags, positional: string[]): Promise<void> {
   const bvid = String(positional[0] ?? '')
-  if (!BV_RE.test(bvid)) { console.error('用法: node bili.mjs shots <BV号> [--grid 3x3] [--p 1] [--out 目录]'); process.exit(2) }
+  if (!BV_RE.test(bvid)) { console.error('用法: bun bili.ts shots <BV号> [--grid 3x3] [--p 1] [--out 目录]'); process.exit(2) }
   const grid = String(flags.get('grid') ?? '3x3')
   const m = /^(\d)x(\d)$/.exec(grid)
   const cols = Number(m?.[1]), rows = Number(m?.[2])
@@ -327,7 +339,7 @@ export async function cmdShots(flags, positional) {
   // 多段视频（老的长视频）只有第一段能抽 —— 把时间点压缩到这一段里，别在后半段白等
   const span = play.seconds > 1 ? Math.min(dur, play.seconds) : dur
   console.log(`=== 《${v.title}》抽帧 ${cols}×${rows} ===`)
-  console.log(`UP: ${v.owner?.name}   时长: ${fmtDur(dur)}${p > 1 ? `   第 ${p} P` : ''}   画质: ${QN_TEXT[play.quality] ?? play.quality}${play.segments > 1 ? `（分 ${play.segments} 段，只抽前 ${fmtDur(span)}）` : ''}`)
+  console.log(`UP: ${v.owner?.name}   时长: ${fmtDur(dur)}${p > 1 ? `   第 ${p} P` : ''}   画质: ${QN_TEXT[play.quality ?? 0] ?? play.quality}${play.segments > 1 ? `（分 ${play.segments} 段，只抽前 ${fmtDur(span)}）` : ''}`)
 
   // 每格取「该格时间窗的中点」：开头常是黑场/片头，结尾常是黑场，掐头去尾各半格
   const times = Array.from({ length: N }, (_, i) => Math.min(span - 0.2, Math.max(0, ((i + 0.5) * span) / N)))
@@ -336,7 +348,7 @@ export async function cmdShots(flags, positional) {
   // 格子尺寸跟视频自身比例走（竖屏就 360×640），保证拼图不变形
   const dw = Number(v.dimension?.width) || 16
   const dh = Number(v.dimension?.height) || 9
-  const even = (n) => Math.max(2, Math.round(n / 2) * 2)
+  const even = (n: number): number => Math.max(2, Math.round(n / 2) * 2)
   const cw = even(dw >= dh ? 640 : (640 * dw) / dh)
   const ch = even(dw >= dh ? (640 * dh) / dw : 640)
   const vf = `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2:color=black`
@@ -371,12 +383,12 @@ export async function cmdShots(flags, positional) {
   console.log('  图看不清就 --grid 4x4（更细）、--p 2 换一 P；字幕有官方轨时先 --read，抽帧是补画面那一路')
 }
 
-export async function cmdComment(flags, positional) {
+export async function cmdComment(flags: Flags, positional: string[]): Promise<void> {
   const bvid = String(positional[0] ?? '')
   let message = String(flags.get('message') ?? '')
   const dry = flags.has('dry') || flags.get('dry') === true
   const go = flags.has('go') || flags.get('go') === true
-  if (!BV_RE.test(bvid) || !message.trim()) { console.error('用法: node bili.mjs comment <BV> --message "…" [--dry|--go]'); process.exit(2) }
+  if (!BV_RE.test(bvid) || !message.trim()) { console.error('用法: bun bili.ts comment <BV> --message "…" [--dry|--go]'); process.exit(2) }
   if (dry && go) { console.error('--dry 和 --go 二选一'); process.exit(2) }
   if (!dry && !go) { console.error('拒绝裸跑：写操作必须显式 --dry（只打印）或 --go（真的发）'); process.exit(2) }
 
@@ -393,11 +405,11 @@ export async function cmdComment(flags, positional) {
   if (message.length > 500) { console.error(`正文 ${message.length} 字 —— 太长了，像刷屏 ✗ 压到 500 字以内`); process.exit(2) }
 
   const cred = loadCred()
-  const miss = ['sessdata', 'bili_jct'].filter((k) => !cred[k])
+  const miss = (['sessdata', 'bili_jct'] as const).filter((k) => !cred?.[k])
   if (miss.length) { console.error(`凭据缺 ${miss.join(', ')} —— 写操作必须要，去设置页补`); process.exit(3) }
   const v = await getView(bvid, cred)
 
-  const body = { type: 1, oid: String(v.aid), message, plat: 1, csrf: cred.bili_jct }
+  const body = { type: '1', oid: String(v.aid), message, plat: '1', csrf: cred.bili_jct }
   const url = 'https://api.bilibili.com/x/v2/reply/add'
   if (dry) {
     console.log('=== 将要发出的请求（--dry，没有发）===')
@@ -409,9 +421,9 @@ export async function cmdComment(flags, positional) {
     return
   }
   // --go：先校验登录态（cookie 失效就别浪费额度）
-  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
   if (nav.code !== 0 || nav.data?.isLogin !== true) { console.error(`✗ 登录态失效：${explainCode(nav.code)} —— 重抄 cookie 再来`); process.exit(4) }
-  console.log(`登录态 ✓ ${nav.data.uname}（mid ${nav.data.mid}）`)
+  console.log(`登录态 ✓ ${nav.data!.uname}（mid ${nav.data!.mid}）`)
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'user-agent': UA, referer: `https://www.bilibili.com/video/${bvid}/`, cookie: cookieHeader(cred), 'content-type': 'application/x-www-form-urlencoded' },
@@ -428,15 +440,15 @@ export async function cmdComment(flags, positional) {
 // ── interact：点赞 / 投币 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
 // 三种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
 // 是在纠正前面的动作，不占额度也不判重 —— 但仍要 --dry / --go 与同一套节流熔断。
-const INTERACT_USAGE = `用法: node bili.mjs interact <BV|UID> (--like | --coin [1|2] | --follow) [--undo] [--dry|--go]
+const INTERACT_USAGE = `用法: bun bili.ts interact <BV|UID> (--like | --coin [1|2] | --follow) [--undo] [--dry|--go]
   --like        点赞（--undo = 取消赞）
   --coin [1|2]  投币，默认 1 个（币投出去收不回 —— 没有 --undo）
   --follow      关注这条视频的 UP（目标写成 UID 也行；--undo = 取关）
   一次只做一件事；写操作必须 --dry（只打印）或 --go（真的做）`
 
-const ACT_TEXT = { like: '点赞', coin: '投币', follow: '关注' }
+const ACT_TEXT: Record<string, string> = { like: '点赞', coin: '投币', follow: '关注' }
 
-export async function cmdInteract(flags, positional) {
+export async function cmdInteract(flags: Flags, positional: string[]): Promise<void> {
   const target = String(positional[0] ?? '')
   const dry = flags.has('dry') || flags.get('dry') === true
   const go = flags.has('go') || flags.get('go') === true
@@ -462,11 +474,11 @@ export async function cmdInteract(flags, positional) {
   const cfg = config()
   if (cfg.share?.enabled === false) { console.error('分享已在设置里关闭（share.enabled=false）→ 这次不做（看视频/写日记照常 ✓）'); process.exit(3) }
   const cred = loadCred()
-  const miss = ['sessdata', 'bili_jct'].filter((k) => !cred[k])
+  const miss = (['sessdata', 'bili_jct'] as const).filter((k) => !cred?.[k])
   if (miss.length) { console.error(`凭据缺 ${miss.join(', ')} —— 写操作必须要，去设置页补`); process.exit(3) }
 
   // 视频类互动要拿 aid（点赞/投币接口只认 aid）与 UP 的 mid（关注）；只读，--dry 也要这一步
-  const v = isBv ? await getView(target, cred) : null
+  const v: VideoView = isBv ? await getView(target, cred) : ({} as VideoView)
   const fid = action !== 'follow' ? '' : (isBv ? String(v.owner?.mid ?? '') : target)
   if (action === 'follow' && !fid) { console.error('✗ 拿不到 UP 的 mid —— 用 UID 直接关注'); process.exit(4) }
   if (action === 'follow' && String(cfg.self?.mid ?? '') === fid) {
@@ -489,16 +501,17 @@ export async function cmdInteract(flags, positional) {
     }
   }
 
-  let url, body
+  let url: string
+  let body: Record<string, string>
   if (action === 'like') {
     url = 'https://api.bilibili.com/x/web-interface/archive/like'
-    body = { aid: String(v.aid), like: undo ? 2 : 1, csrf: cred.bili_jct }
+    body = { aid: String(v.aid), like: undo ? '2' : '1', csrf: cred.bili_jct }
   } else if (action === 'coin') {
     url = 'https://api.bilibili.com/x/web-interface/coin/add'
-    body = { aid: String(v.aid), multiply: n, select_like: 0, csrf: cred.bili_jct }
+    body = { aid: String(v.aid), multiply: String(n), select_like: '0', csrf: cred.bili_jct }
   } else {
     url = 'https://api.bilibili.com/x/relation/modify'
-    body = { fid, act: undo ? 2 : 1, re_src: 11, csrf: cred.bili_jct }
+    body = { fid, act: undo ? '2' : '1', re_src: '11', csrf: cred.bili_jct }
   }
   const referer = isBv ? `https://www.bilibili.com/video/${target}/` : 'https://space.bilibili.com/'
 
@@ -512,20 +525,20 @@ export async function cmdInteract(flags, positional) {
     return
   }
   // --go：先校验登录态（cookie 失效就别白发一次写请求）
-  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
   if (nav.code !== 0 || nav.data?.isLogin !== true) { console.error(`✗ 登录态失效：${explainCode(nav.code)} —— 重抄 cookie 再来`); process.exit(4) }
-  if (action === 'follow' && String(nav.data.mid) === fid) { console.error('✗ 这是你自己（与主人共用的号）—— 不能关注自己'); process.exit(2) }
-  if (action === 'coin' && nav.data.money !== undefined && Number(nav.data.money) < n) {
-    console.error(`✗ 硬币不够：账上 ${nav.data.money} 个，要投 ${n} 个 —— 别投`); process.exit(3)
+  if (action === 'follow' && String(nav.data!.mid) === fid) { console.error('✗ 这是你自己（与主人共用的号）—— 不能关注自己'); process.exit(2) }
+  if (action === 'coin' && nav.data!.money !== undefined && Number(nav.data!.money) < n) {
+    console.error(`✗ 硬币不够：账上 ${nav.data!.money} 个，要投 ${n} 个 —— 别投`); process.exit(3)
   }
-  console.log(`登录态 ✓ ${nav.data.uname}（mid ${nav.data.mid}）`)
+  console.log(`登录态 ✓ ${nav.data!.uname}（mid ${nav.data!.mid}）`)
   const j = await apiPost(url, body, { cred, referer })
   if (Number(j.code) !== 0) { console.error(`✗ ${what}失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`); process.exit(5) }
   ledgerAppend({ type: 'interact', action, undo: undo || undefined, target: key, bvid: isBv ? target : undefined, note: `${what} ${isBv ? target : fid}` })
   console.log(`✓ 已${what}：${where}${action === 'follow' && isBv ? ` · UP ${v.owner?.name}` : ''}${undo ? '' : ` · 今天已互动 ${acted.length + 1}/${limit}`}`)
 }
 
-export async function cmdDiary(positional) {
+export async function cmdDiary(positional: string[]): Promise<void> {
   if (positional[0] === 'show') {
     const n = Math.min(100, Math.max(1, Number(positional[1] ?? 20)))
     try {
@@ -535,7 +548,7 @@ export async function cmdDiary(positional) {
     return
   }
   const text = positional.join(' ').trim()
-  if (!text) { console.error('用法: node bili.mjs diary <今天的一段话>  |  diary show [N]'); process.exit(2) }
+  if (!text) { console.error('用法: bun bili.ts diary <今天的一段话>  |  diary show [N]'); process.exit(2) }
   fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true })
   const stamp = new Date()
   fs.appendFileSync(DIARY_FILE, `\n## ${stamp.toLocaleDateString('sv-SE')} ${stamp.toTimeString().slice(0, 5)}\n${text}\n`)
@@ -543,14 +556,14 @@ export async function cmdDiary(positional) {
 }
 
 // ── schedule：它自己排作息 / 定时任务（写到 lib/schedule 的唯一真相；到点由宿主投「计划拍」）──
-const SCHEDULE_USAGE = `用法: node bili.mjs schedule <add|list|drop|clear> [参数]
+const SCHEDULE_USAGE = `用法: bun bili.ts schedule <add|list|drop|clear> [参数]
   add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"]
       三选一：一次性（今天/某天的某个点，过了会排到明天说一声）/ 每天 / 每隔 N 分钟（最短 ${MIN_EVERY_MIN}，最长 1 天）
   list                        看排了什么、下一次什么时候（最近投过的也在）
   drop <id>                   撤一条；clear 全撤 —— 撤完计划为空，宿主恢复兜底节拍
 计划非空时宿主只按你的计划投拍（固定兜底节拍暂停）—— 节奏拿回你自己手里 ✓`
 
-export function cmdSchedule(positional, flags) {
+export function cmdSchedule(positional: string[], flags: Flags): void {
   const sub = positional[0]
   if (sub === 'add') {
     let r
@@ -561,11 +574,11 @@ export function cmdSchedule(positional, flags) {
         every: flags.has('every') ? String(flags.get('every')) : undefined,
         label: flags.has('label') ? String(flags.get('label')) : undefined,
       })
-    } catch (e) { console.error(`✗ ${e.message}\n\n${SCHEDULE_USAGE}`); process.exit(2) }
+    } catch (e) { console.error(`✗ ${errMsg(e)}\n\n${SCHEDULE_USAGE}`); process.exit(2) }
     const e = r.entry
     console.log(`✓ 已排（id ${e.id}）：${fmtWhen(e)} —— ${e.label}`)
     if (r.note) console.log(`  （${r.note}）`)
-    console.log(`到点宿主把这一拍投进会话；在排 ${planSummary().pending}/${MAX_PENDING} 条。撤：node bili.mjs schedule drop ${e.id}`)
+    console.log(`到点宿主把这一拍投进会话；在排 ${planSummary().pending}/${MAX_PENDING} 条。撤：bun bili.ts schedule drop ${e.id}`)
     return
   }
   if (sub === 'list') {
@@ -586,7 +599,7 @@ export function cmdSchedule(positional, flags) {
   }
   if (sub === 'drop') {
     const id = positional[1]
-    if (!id) { console.error(`✗ 要给 id：node bili.mjs schedule drop s1（schedule list 看 id）`); process.exit(2) }
+    if (!id) { console.error(`✗ 要给 id：bun bili.ts schedule drop s1（schedule list 看 id）`); process.exit(2) }
     if (!dropEntry(id)) { console.error(`✗ 没有 [${id}] 这条 —— schedule list 对一眼`); process.exit(2) }
     console.log(`✓ 撤了 [${id}]${readPlan().entries.length ? '' : ' —— 计划空了，宿主恢复兜底节拍'}`)
     return
@@ -601,7 +614,7 @@ export function cmdSchedule(positional, flags) {
 }
 
 /** 口味回顾：只读账本，把它自己的观看史还给它 —— 喜欢什么由它自己读、自己判断，不存配置 */
-export function cmdTaste(flags) {
+export function cmdTaste(flags: Flags): void {
   const days = Math.min(3650, Math.max(1, Number(flags.get('days') ?? 30)))
   const lim = Math.min(60, Math.max(1, Number(flags.get('n') ?? 15)))
   const log = readLedger().log
@@ -610,16 +623,16 @@ export function cmdTaste(flags) {
   const watched = recent.filter((x) => x.type === 'watch')
   const comments = recent.filter((x) => x.type === 'comment')
   const acts = recent.filter((x) => x.type === 'interact' && !x.undo)
-  const day = (at) => new Date(at).toLocaleDateString('sv-SE')
+  const day = (at: string): string => new Date(at).toLocaleDateString('sv-SE')
   const earliest = log.length ? day(log[0].at) : null
 
   console.log(`口味回顾（最近 ${days} 天；账本共 ${log.length} 条${earliest ? `，最早到 ${earliest}` : ''}）`)
-  const byAct = (a) => acts.filter((x) => x.action === a).length
+  const byAct = (a: string): number => acts.filter((x) => x.action === a).length
   console.log(`看过 ${watched.length} 条 · 评论 ${comments.length} 条 · 互动 ${acts.length} 次${acts.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`)
   if (!watched.length && !comments.length && !acts.length) { console.log('\n（这段时间还没留下记录 —— 去看几条、写点什么，再回来回顾）'); return }
 
   // UP 只从新记录里有（watch.up 是后加的）；老记录只有标题，照样能读
-  const ups = new Map()
+  const ups = new Map<string, number>()
   for (const x of watched) if (x.up) ups.set(x.up, (ups.get(x.up) ?? 0) + 1)
   if (ups.size) {
     console.log('\n常看的 UP：')
@@ -632,7 +645,7 @@ export function cmdTaste(flags) {
   if (comments.length || acts.length) {
     const titles = new Map()
     for (const x of log) if (x.bvid && x.title) titles.set(x.bvid, x.title)
-    const touched = [...comments, ...acts].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, lim)
+    const touched = [...comments, ...acts].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, lim)
     console.log('\n动过手的：')
     for (const x of touched) {
       const what = x.type === 'comment' ? `评论「${x.note ?? ''}」` : (x.note ?? x.action)
@@ -644,7 +657,7 @@ export function cmdTaste(flags) {
   console.log('\n这些都只是你自己的记录 —— 喜欢什么、看腻了什么，自己读、自己判断（想固定下来就写进日记或 persona.md）。')
 }
 
-export function cmdLedger() {
+export function cmdLedger(): void {
   const led = readLedger()
   const limit = Math.max(0, Number(config().quota?.writeDaily ?? 3))
   const wrote = writesToday()
@@ -652,7 +665,7 @@ export function cmdLedger() {
   for (const x of wrote) console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.type} ${x.bvid} ${x.note ?? x.title ?? ''}`)
   const ilimit = Math.max(0, Number(config().quota?.interactDaily ?? DEFAULTS.quota.interactDaily))
   const acted = interactionsToday()
-  const byAct = (a) => acted.filter((x) => x.action === a).length
+  const byAct = (a: string): number => acted.filter((x) => x.action === a).length
   console.log(`互动：${acted.length}/${ilimit} 次${acted.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`)
   for (const x of acted) console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.note ?? x.action}`)
   const recent = led.log.filter((x) => x.type === 'watch' && new Date(x.at).toLocaleDateString('sv-SE') === today())

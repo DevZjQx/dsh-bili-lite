@@ -8,10 +8,10 @@
 
 **Depends on.** `config/paths`、`config/store`、`lib/bilibili`、`lib/qrcode`、`lib/json-file`、`lib/schedule`（计划的唯一真相，与 `bili-pulse` 共用）、`lib/ffmpeg`（可选依赖：只有 `shots` 用得到，缺了不影响其余子命令）。
 
-**Public surface.** `bili.mjs` —— 可执行入口（`node …/bili.mjs <子命令>`）。宿主只引用路径（spawn 自检、心跳文案点名），从不 import 它。
+**Public surface.** `bili.ts` —— 可执行入口（`bun …/bili.ts <子命令>`；插件 spawn 的是编译后的 dist 版本）。宿主只引用路径（spawn 自检、心跳文案点名），从不 import 它。
 
 **Owner.** 暂无专人（app owner 代管）。
 
-**Rejected.** 把每个子命令拆一个文件 —— 代码总量千行上下，commands.js + ledger.js 已经够清楚。把额度/判重做成可配置关闭 —— 拒绝：克制是功能，不是开关。为抽帧引 npm 的 JPEG 解码器或随包分发 ffmpeg —— 拒绝：lite 不背二进制和依赖树；改为「用得上的人自己装 ffmpeg，装不上就少画面这一路」。把整段视频下载下来再抽 —— 拒绝：直接对直链按时间点 seek，抽完即删，磁盘不随视频长度涨。
+**Rejected.** 把每个子命令拆一个文件 —— 代码总量千行上下，commands.ts + ledger.ts 已经够清楚。把额度/判重做成可配置关闭 —— 拒绝：克制是功能，不是开关。为抽帧引 npm 的 JPEG 解码器或随包分发 ffmpeg —— 拒绝：lite 不背二进制和依赖树；改为「用得上的人自己装 ffmpeg，装不上就少画面这一路」。把整段视频下载下来再抽 —— 拒绝：直接对直链按时间点 seek，抽完即删，磁盘不随视频长度涨。
 
-**Exceptions.** 入口文件名是 `bili.mjs` 而不是 `feature.mjs`：CLI 的「框架约定」是可执行文件名（对 agent 与 README 的命令行保持可读）。结构检查脚本把「带 shebang 的根级 .mjs」认作合法入口，详见文件头注释。
+**Exceptions.** 入口文件名是 `bili.ts` 而不是 `feature.ts`：CLI 的「框架约定」是可执行文件名（对 agent 与 README 的命令行保持可读）。结构检查脚本把「带 shebang 的根级 .ts」认作合法入口，详见文件头注释。

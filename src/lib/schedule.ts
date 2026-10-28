@@ -1,7 +1,7 @@
 // ============================================================================
 // dsh-bili-lite · 计划（它自己排的作息 / 定时任务）—— 两侧共用的唯一真相
 //
-// 谁决定：永远它自己 —— agent 用 `node bili.mjs schedule add/drop/clear` 写这里，
+// 谁决定：永远它自己 —— agent 用 `bun bili.ts schedule add/drop/clear` 写这里，
 // 宿主（bili-pulse）只照着读：到点投「计划拍」、拍里带上它自己写的标签。
 // 宿主不排、不改、不掷骰子 —— 计划文件和旧的「替它掷骰子排时刻表」是两回事：
 // 那个被否掉是因为决定在宿主手里，这里决定在模型手里 ✓
@@ -13,26 +13,52 @@
 //
 // 防滥用上限（写死，与写额度同 philosophy）：在排 ≤30 条；--every 最短 5 分钟。
 // ============================================================================
-import { SCHEDULE_FILE } from '../config/paths.js'
-import { readJson, writeJson } from './json-file.js'
+import { SCHEDULE_FILE } from '../config/paths.ts'
+import { readJson, writeJson } from './json-file.ts'
 
 export const MAX_PENDING = 30
 export const MIN_EVERY_MIN = 5
 export const MAX_EVERY_MIN = 1440
 
-const pad = (n) => String(n).padStart(2, '0')
-/** 仓库统一的时间展示：sv-SE → "YYYY-MM-DD HH:mm" */
-const fmtDate = (d) => d.toLocaleDateString('sv-SE') + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+export type EntryKind = 'once' | 'daily' | 'every'
 
-export function readPlan() {
-  const p = readJson(SCHEDULE_FILE, { seq: 0, entries: [], fired: [] })
-  return { seq: Number(p.seq) || 0, entries: Array.isArray(p.entries) ? p.entries : [], fired: Array.isArray(p.fired) ? p.fired : [] }
+export interface ScheduleEntry {
+  id: string
+  kind: EntryKind
+  label: string
+  createdAt: string
+  /** 下一次该投的时间（ISO）；坏数据可能缺失，读的时候按防御式处理 */
+  nextDue: string
+  /** daily 才有 */
+  at?: string
+  /** every 才有 */
+  everyMin?: number
+  /** once 的人话时间（展示用） */
+  plan?: string
+  /** add 时的一次性提示（如「今天这个点已过 → 排到明天」） */
+  note?: string | null
 }
 
-function writePlan(p) { writeJson(SCHEDULE_FILE, p) }
+export interface FiredEntry { at: string; id: string; kind: EntryKind; label: string }
+export interface PlanFile { seq: number; entries: ScheduleEntry[]; fired: FiredEntry[] }
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+/** 仓库统一的时间展示：sv-SE → "YYYY-MM-DD HH:mm" */
+const fmtDate = (d: Date): string => d.toLocaleDateString('sv-SE') + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+
+export function readPlan(): PlanFile {
+  const p = readJson<Partial<PlanFile>>(SCHEDULE_FILE, {})
+  return {
+    seq: Number(p.seq) || 0,
+    entries: Array.isArray(p.entries) ? p.entries : [],
+    fired: Array.isArray(p.fired) ? p.fired : [],
+  }
+}
+
+function writePlan(p: PlanFile): void { writeJson(SCHEDULE_FILE, p) }
 
 /** "HH:MM" → {h,m}；不合规矩给 null（让调用方报用法，不静默猜） */
-export function parseHHMM(s) {
+export function parseHHMM(s: string | undefined | null): { h: number; m: number } | null {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? '').trim())
   if (!m) return null
   const h = Number(m[1]), mi = Number(m[2])
@@ -40,7 +66,7 @@ export function parseHHMM(s) {
 }
 
 /** 下一个「今天（或明天）的 h:m」—— 已过就排到明天（本地时区） */
-export function nextDailyAt(h, m, from = new Date()) {
+export function nextDailyAt(h: number, m: number, from: Date = new Date()): Date {
   const d = new Date(from)
   d.setHours(h, m, 0, 0)
   if (d.getTime() <= from.getTime()) d.setDate(d.getDate() + 1)
@@ -48,7 +74,7 @@ export function nextDailyAt(h, m, from = new Date()) {
 }
 
 /** --at："21:30"（今天，过了就明天）或 "2026-02-06 21:30" / "2026-02-06T21:30"（本地时区）→ Date；不对就 throw */
-export function parseAt(s, now = new Date()) {
+export function parseAt(s: string | undefined | null, now: Date = new Date()): Date {
   const str = String(s ?? '').trim()
   const m = /^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})$/.exec(str)
   if (m) {
@@ -63,7 +89,7 @@ export function parseAt(s, now = new Date()) {
 }
 
 /** --every："90" | "90m" | "2h" | "1d" → 分钟数（5–1440）；不对就 throw */
-export function parseEvery(s) {
+export function parseEvery(s: string | undefined | null): number {
   const m = /^(\d+(?:\.\d+)?)\s*([mhd]?)$/i.exec(String(s ?? '').trim())
   if (!m) throw new Error(`看不懂 --every "${s}" —— 示例：90m、2h、45`)
   const n = Number(m[1])
@@ -76,50 +102,56 @@ export function parseEvery(s) {
 }
 
 /** 人话时间（展示用）：once → "2026-02-06 21:30"，daily → "每天 21:30"，every → "每 90 分钟" */
-export function fmtWhen(e) {
+export function fmtWhen(e: ScheduleEntry): string {
   if (e.kind === 'daily') return `每天 ${e.at}`
   if (e.kind === 'every') return `每 ${e.everyMin} 分钟`
   return e.plan || (e.nextDue ? fmtDate(new Date(e.nextDue)) : '?')
 }
 
-const defaultLabel = { once: '到点了，看一眼？', daily: '按计划的日常一拍', every: '按计划的一拍' }
-const cleanLabel = (s, kind) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || defaultLabel[kind]
+const defaultLabel: Record<EntryKind, string> = { once: '到点了，看一眼？', daily: '按计划的日常一拍', every: '按计划的一拍' }
+const cleanLabel = (s: string | undefined, kind: EntryKind): string =>
+  String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || defaultLabel[kind]
+
+export interface AddEntryInput { at?: string; daily?: string; every?: string; label?: string }
 
 /**
  * 加一条（三种拍子给一个）：{ at?, daily?, every?, label? }
  * 返回 { entry, note }；排满了 / 参数不对 throw（CLI 把话带给模型）。
  */
-export function addEntry({ at, daily, every, label } = {}) {
+export function addEntry({ at, daily, every, label }: AddEntryInput = {}): { entry: ScheduleEntry; note: string | null } {
   const given = [at !== undefined, daily !== undefined, every !== undefined].filter(Boolean).length
   if (given !== 1) throw new Error('--at / --daily / --every 三选一，正好给一个')
   const p = readPlan()
   if (p.entries.length >= MAX_PENDING) throw new Error(`计划排满了（最多 ${MAX_PENDING} 条在排）—— 先 schedule drop 几条，或 clear 重排`)
 
-  let entry
+  let draft: Omit<ScheduleEntry, 'id' | 'label' | 'createdAt'>
   if (at !== undefined) {
     const bare = parseHHMM(at)          // 只给了 HH:MM：今天这个点已过会排到明天，说一声
     const rolled = bare && new Date().setHours(bare.h, bare.m, 0, 0) <= Date.now()
     const t = parseAt(at)
-    entry = { kind: 'once', nextDue: t.toISOString(), plan: fmtDate(t), note: rolled ? '今天这个点已过 → 排到明天' : null }
+    draft = { kind: 'once', nextDue: t.toISOString(), plan: fmtDate(t), note: rolled ? '今天这个点已过 → 排到明天' : null }
   } else if (daily !== undefined) {
     const hm = parseHHMM(daily)
     if (!hm) throw new Error(`看不懂 --daily "${daily}" —— 要 "HH:MM"，示例：21:00`)
     const t = nextDailyAt(hm.h, hm.m)
-    entry = { kind: 'daily', at: `${pad(hm.h)}:${pad(hm.m)}`, nextDue: t.toISOString() }
+    draft = { kind: 'daily', at: `${pad(hm.h)}:${pad(hm.m)}`, nextDue: t.toISOString() }
   } else {
     const min = parseEvery(every)
-    entry = { kind: 'every', everyMin: min, nextDue: new Date(Date.now() + min * 60_000).toISOString() }
+    draft = { kind: 'every', everyMin: min, nextDue: new Date(Date.now() + min * 60_000).toISOString() }
   }
-  entry.id = 's' + (p.seq + 1)
-  entry.label = cleanLabel(label, entry.kind)
-  entry.createdAt = new Date().toISOString()
+  const entry: ScheduleEntry = {
+    ...draft,
+    id: 's' + (p.seq + 1),
+    label: cleanLabel(label, draft.kind),
+    createdAt: new Date().toISOString(),
+  }
   p.seq += 1
   p.entries.push(entry)
   writePlan(p)
   return { entry, note: entry.note ?? null }
 }
 
-export function dropEntry(id) {
+export function dropEntry(id: string | undefined): boolean {
   const p = readPlan()
   const before = p.entries.length
   p.entries = p.entries.filter((e) => e.id !== String(id ?? '').trim())
@@ -127,7 +159,7 @@ export function dropEntry(id) {
   return p.entries.length < before
 }
 
-export function clearPlan() {
+export function clearPlan(): number {
   const p = readPlan()
   const n = p.entries.length
   p.entries = []
@@ -136,23 +168,23 @@ export function clearPlan() {
 }
 
 /** 到点的（含错过补投：宿主刚起来也照发）；按 nextDue 排序，只读不写 */
-export function dueEntries(now = Date.now()) {
+export function dueEntries(now = Date.now()): ScheduleEntry[] {
   return readPlan().entries
     .filter((e) => Number.isFinite(Date.parse(e.nextDue)) && Date.parse(e.nextDue) <= now)
     .sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue))
 }
 
 /** 投完记账：once 删掉；daily/every 推到下一次；追一笔 fired（最多留 50 条） */
-export function markFired(ids, now = new Date()) {
+export function markFired(ids: string[], now: Date = new Date()): ScheduleEntry[] {
   const p = readPlan()
   const hit = new Set(ids)
-  const done = []
+  const done: ScheduleEntry[] = []
   p.entries = p.entries.filter((e) => {
     if (!hit.has(e.id)) return true
     done.push(e)
-    if (e.kind === 'daily' && parseHHMM(e.at)) {
-      const { h, m } = parseHHMM(e.at)
-      e.nextDue = nextDailyAt(h, m, now).toISOString()
+    const hm = parseHHMM(e.at)
+    if (e.kind === 'daily' && hm) {
+      e.nextDue = nextDailyAt(hm.h, hm.m, now).toISOString()
       return true
     }
     if (e.kind === 'every' && Number.isFinite(Number(e.everyMin))) {
@@ -169,8 +201,10 @@ export function markFired(ids, now = new Date()) {
   return done
 }
 
+export interface PlanSummary { pending: number; nextDueText: string | null; nextWhenText: string | null }
+
 /** 设置页 / 状态用：在排几条、下一次什么时候 */
-export function planSummary(now = new Date()) {
+export function planSummary(now: Date = new Date()): PlanSummary {
   const p = readPlan()
   const next = p.entries.filter((e) => Number.isFinite(Date.parse(e.nextDue))).sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue))[0]
   return {

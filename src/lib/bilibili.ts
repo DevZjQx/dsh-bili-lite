@@ -9,32 +9,75 @@
  */
 import fs from 'node:fs'
 import crypto from 'node:crypto'
-import { config } from '../config/store.js'
-import { DATA_DIR, CRED_FILE, BAN_FILE, CACHE_FILE } from '../config/paths.js'
-import { readJson, writeJson } from './json-file.js'
+import { config } from '../config/store.ts'
+import { DATA_DIR, CRED_FILE, BAN_FILE, CACHE_FILE } from '../config/paths.ts'
+import { readJson, writeJson } from './json-file.ts'
 
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`
+
+/** 凭据（与主人共用一个身份；永远不回显） */
+export interface Cred { sessdata: string; bili_jct: string; buvid3: string }
+export const cookieHeader = (cred: Cred): string => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`
 
 // ── 凭据（trim、查缺、不回显） ─────────────────────────────────────────────
-export function loadCred() {
-  let j
-  try { j = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8').replace(/^\uFEFF/, '')) }
+export function loadCred(): Cred {
+  let j: Partial<Cred>
+  try { j = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8').replace(/^\uFEFF/, '')) as Partial<Cred> }
   catch { throw new Error(`没有凭据文件：${CRED_FILE}\n  去设置页「B站养鱼」粘贴一次 cookie ✓（SESSDATA 是 HttpOnly，必须 F12 手动复制 ✗）`) }
-  const clean = (v) => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '')
+  const clean = (v: string | undefined): string => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '')
   return { sessdata: clean(j.sessdata), bili_jct: clean(j.bili_jct), buvid3: clean(j.buvid3) }
 }
 
 /** 凭据落盘（0600）：设置页验证后与扫码成功后共用这一条路，不各写一份 */
-export function saveCred(cred) {
+export function saveCred(cred: Cred): void {
   fs.mkdirSync(DATA_DIR, { recursive: true })
   fs.writeFileSync(CRED_FILE, JSON.stringify(cred, null, 2) + '\n')
   try { fs.chmodSync(CRED_FILE, 0o600) } catch {}
 }
 
+// ── 响应形状（按防御式解析：字段都可能缺，调用处一律 ?? 兜底） ─────────────
+export interface ApiEnvelope<T = unknown> { code?: number; message?: string; data?: T }
+
+export interface SelfInfo { mid: string; name: string }
+export interface NavData {
+  isLogin?: boolean
+  mid?: number | string
+  uname?: string
+  money?: number
+  level_info?: { current_level?: number }
+  wbi_img?: { img_url?: string; sub_url?: string }
+}
+export interface NavResp extends ApiEnvelope<NavData> { code: number }
+
+export interface VideoOwner { mid?: number | string; name?: string }
+export interface VideoStat { view?: number; danmaku?: number; like?: number; coin?: number; favorite?: number }
+export interface VideoPage { cid?: number; duration?: number }
+export interface VideoView {
+  bvid?: string
+  aid?: number | string
+  cid?: number
+  title?: string
+  desc?: string
+  pubdate?: number
+  duration?: number
+  owner?: VideoOwner
+  stat?: VideoStat
+  pages?: VideoPage[]
+  dimension?: { width?: number; height?: number }
+}
+export interface ViewResp extends ApiEnvelope<VideoView> { code: number }
+
+export interface SubtitleItem { lan?: string; subtitle_url?: string }
+export interface PlayerInfo {
+  view_points?: Array<{ from?: number; content?: string }>
+  subtitle?: { subtitles?: SubtitleItem[] }
+  need_login_subtitle?: boolean
+}
+export interface PlayerResp extends ApiEnvelope<PlayerInfo> { code: number }
+
 /** 真的去 nav 验证一次登录态，返回 { mid, name }（写凭据前后都该走这里，不做离线格式检查） */
-export async function whoami(cred) {
-  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred })
+export async function whoami(cred: Cred): Promise<SelfInfo> {
+  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
   if (nav.code !== 0 || nav.data?.isLogin !== true) {
     throw new Error(`登录验证失败：${explainCode(nav.code)}${nav.message ? `（${nav.message}）` : ''}`)
   }
@@ -43,22 +86,36 @@ export async function whoami(cred) {
 
 // ── 扫码登录（passport.bilibili.com）：generate 出二维码 → poll 查状态；同一套节流/熔断 ──
 
+export interface QrGenerate { url: string; qrcodeKey: string }
+export type QrStatus = 'waiting' | 'scanned' | 'expired'
+export type QrPollResult =
+  | { status: QrStatus }
+  | { status: 'done'; cred: Cred; mid: string }
+
 /** 申请二维码：url 是二维码内容（B 站 App 扫码后确认），qrcodeKey 用于轮询（约 3 分钟有效） */
-export async function qrGenerate() {
-  const j = await apiGet('https://passport.bilibili.com/x/passport-login/web/qrcode/generate', { referer: 'https://passport.bilibili.com/' })
+export async function qrGenerate(): Promise<QrGenerate> {
+  const j = await apiGet<ApiEnvelope<{ qrcode_key?: string; url?: string }>>(
+    'https://passport.bilibili.com/x/passport-login/web/qrcode/generate',
+    { referer: 'https://passport.bilibili.com/' },
+  )
   if (j.code !== 0 || !j.data?.qrcode_key || !j.data?.url) {
     throw new Error(`申请二维码失败：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
   }
   return { url: String(j.data.url), qrcodeKey: String(j.data.qrcode_key) }
 }
 
+interface QrPollData { code?: number; message?: string; url?: string }
+
 /** 轮询一次：waiting 未扫码 / scanned 已扫码待确认 / expired 已过期 / done 成功（带凭据）。
  *  现行响应：外层 code 恒 0（"OK"），真正的登录状态在 data.code（86101/86090/86038/0） */
-export async function qrPoll(qrcodeKey) {
-  const j = await apiGet(`https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`, { referer: 'https://passport.bilibili.com/' })
-  if (Number(j.code) !== 0) throw new Error(`扫码轮询失败：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+export async function qrPoll(qrcodeKey: string): Promise<QrPollResult> {
+  const j = await apiGet<ApiEnvelope<QrPollData>>(
+    `https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`,
+    { referer: 'https://passport.bilibili.com/' },
+  )
+  if (Number(j.code) !== 0) throw new Error(`扫码轮询失败：${explainCode(Number(j.code))}${j.message ? `（${j.message}）` : ''}`)
   const code = Number(j.data?.code)
-  const status = { 86101: 'waiting', 86090: 'scanned', 86038: 'expired' }[code]
+  const status = ({ 86101: 'waiting', 86090: 'scanned', 86038: 'expired' } as Record<number, QrStatus>)[code]
   if (status) return { status }
   if (code !== 0 || !j.data?.url) throw new Error(`扫码轮询失败：${explainCode(code)}${j.data?.message ? `（${j.data.message}）` : ''}`)
   // 成功：凭据在 data.url 的 query 里（buvid3 可能没有，它可空）
@@ -75,52 +132,57 @@ export async function qrPoll(qrcodeKey) {
 }
 
 // ── 常见返回码 → 人话 ──────────────────────────────────────────────────────
-const CODE_HINTS = {
-  0: '成功',
+const CODE_HINTS: Record<string, string> = {
+  '0': '成功',
   '-101': '账号未登录 —— SESSDATA 失效了，重新复制一次 cookie',
   '-111': 'CSRF 校验失败 —— bili_jct 和当前 SESSDATA 不是同一个账号，两个都要重抄',
   '-400': '请求参数错误',
   '-352': '风控拦截 —— 请求太快或太像机器人，等几分钟',
   '-799': '请求过于频繁 —— 退避一会儿',
-  10031: '操作太快（频率限制）—— 退避，别连发',
-  12015: '需要验证码 —— 停下，人在浏览器里手动过一次',
-  12051: '疑似刷屏 —— 停下，别再发',
-  12002: '评论区已关闭 / 不能评论',
-  34002: '不能给自己的视频投币',
-  34003: '这条投不了币（番剧 / 付费 / 特殊稿件）',
-  34004: '投币数超过 2 —— 一条视频最多 2 个',
-  34005: '今日投币上限（已经投满了）—— 明天再说',
-  65004: '取消赞失败 —— 本来就没点过赞',
-  22003: '这个用户不存在',
-  22004: '不能关注自己 —— 这是你和主人共用的号',
+  '10031': '操作太快（频率限制）—— 退避，别连发',
+  '12015': '需要验证码 —— 停下，人在浏览器里手动过一次',
+  '12051': '疑似刷屏 —— 停下，别再发',
+  '12002': '评论区已关闭 / 不能评论',
+  '34002': '不能给自己的视频投币',
+  '34003': '这条投不了币（番剧 / 付费 / 特殊稿件）',
+  '34004': '投币数超过 2 —— 一条视频最多 2 个',
+  '34005': '今日投币上限（已经投满了）—— 明天再说',
+  '65004': '取消赞失败 —— 本来就没点过赞',
+  '22003': '这个用户不存在',
+  '22004': '不能关注自己 —— 这是你和主人共用的号',
 }
-export const explainCode = (code) => CODE_HINTS[String(code)] ?? `code=${code}（未知返回码）`
+export const explainCode = (code: number | string | undefined): string =>
+  CODE_HINTS[String(code)] ?? `code=${code}（未知返回码）`
 
 // ── 请求保护：节流 + 熔断 + 一点缓存 ───────────────────────────────────────
 const BAN_CODES = new Set([-412, -352, -799, -509])
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const banUntil = () => Number(readJson(BAN_FILE, {}).until ?? 0)
-const banWhy = () => readJson(BAN_FILE, {}).why ?? '未知原因'
-function setBan(why) {
-  const prev = readJson(BAN_FILE, {})
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms) })
+
+interface BanState { until?: number; why?: string; streak?: number; at?: string }
+const banState = (): BanState => readJson<BanState>(BAN_FILE, {})
+export const banUntil = (): number => Number(banState().until ?? 0)
+export const banWhy = (): string => banState().why ?? '未知原因'
+function setBan(why: string): number {
+  const prev = banState()
   const streak = Number(prev.streak ?? 0) + 1
   const mins = Math.min(30, 5 * 2 ** (streak - 1))   // 5/10/20/30 分钟指数退避
   writeJson(BAN_FILE, { until: Date.now() + mins * 60_000, why, streak, at: new Date().toISOString() })
   return mins
 }
 let lastRequestAt = 0
-function cacheKey(u, cred) {
+
+interface CacheEntry { at?: number; data?: unknown }
+const cacheStore = (): Record<string, CacheEntry> => readJson<Record<string, CacheEntry>>(CACHE_FILE, {})
+
+function cacheKey(u: string, cred: Cred | null | undefined): string {
   const url = new URL(u)
   const params = [...url.searchParams.entries()].filter(([k]) => k !== 'wts' && k !== 'w_rid').sort()
   return crypto.createHash('sha256').update(cred?.sessdata ?? '').update('\0')
     .update(url.hostname + url.pathname + '?' + new URLSearchParams(params)).digest('hex')
 }
 
-/** 熔断状态（账本展示用）：什么时候解禁、因为什么 */
-export { banUntil, banWhy }
-
 /** 熔断中就别发（apiGet / apiText 共用） */
-function throwIfBanned() {
+function throwIfBanned(): void {
   const banned = banUntil()
   if (banned > Date.now()) {
     const mins = Math.ceil((banned - Date.now()) / 60000)
@@ -128,13 +190,20 @@ function throwIfBanned() {
   }
 }
 
+export interface RequestOptions {
+  cred?: Cred | null
+  referer?: string
+  method?: string
+  body?: string
+}
+
 /** 发送段：节流 → 请求 → 412/429 熔断（apiGet / apiText / apiPost 共用，行为写死一处） */
-async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', method = 'GET', body } = {}) {
+async function guardedFetch(u: string, { cred, referer = 'https://www.bilibili.com/', method = 'GET', body }: RequestOptions = {}): Promise<Response> {
   const gap = Math.max(300, Number(config().risk?.minGapMs ?? 1200))
   const idle = Date.now() - lastRequestAt
   if (lastRequestAt && idle < gap) await sleep(gap - idle)
   lastRequestAt = Date.now()
-  const headers = {
+  const headers: Record<string, string> = {
     'user-agent': UA, referer,
     ...(cred ? { cookie: cookieHeader(cred) } : {}),
     ...(body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
@@ -149,7 +218,7 @@ async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', me
 }
 
 /** 风控码 → 熔断（apiGet / apiPost 共用；只判定，不吞掉非风控的返回码） */
-function guardCode(data) {
+function guardCode<T extends ApiEnvelope>(data: T): T {
   if (BAN_CODES.has(Number(data.code))) {
     const mins = setBan(`code=${data.code}`)
     throw new Error(`${data.message ?? ''}（B站风控 ${data.code}）—— 已熔断 ${mins} 分钟`)
@@ -157,20 +226,22 @@ function guardCode(data) {
   return data
 }
 
+export interface ApiGetOptions { cred?: Cred | null; ttlMs?: number; referer?: string }
+
 /** 统一 GET JSON：熔断检查 →（可选）缓存 → 发送 → 风控判定 →（可选）落缓存 */
-export async function apiGet(u, { cred, ttlMs = 0, referer = 'https://www.bilibili.com/' } = {}) {
+export async function apiGet<T = ApiEnvelope>(u: string, { cred, ttlMs = 0, referer = 'https://www.bilibili.com/' }: ApiGetOptions = {}): Promise<T> {
   throwIfBanned()
   const key = ttlMs > 0 ? cacheKey(u, cred) : null
   if (key) {
-    const hit = readJson(CACHE_FILE, {})[key]
-    if (hit && Date.now() - Number(hit.at ?? 0) < ttlMs) return { ...hit.data, _cached: true }
+    const hit = cacheStore()[key]
+    if (hit && Date.now() - Number(hit.at ?? 0) < ttlMs) return { ...(hit.data as object), _cached: true } as T
   }
   const r = await guardedFetch(u, { cred, referer })
-  let data
-  try { data = await r.json() } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
-  guardCode(data)
-  if (Number(data.code) === 0 && key) {
-    const store = readJson(CACHE_FILE, {})
+  let data: T
+  try { data = await r.json() as T } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
+  guardCode(data as unknown as ApiEnvelope)
+  if (Number((data as unknown as ApiEnvelope).code) === 0 && key) {
+    const store = cacheStore()
     store[key] = { at: Date.now(), data }
     const keys = Object.keys(store)
     if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete store[k]
@@ -180,37 +251,37 @@ export async function apiGet(u, { cred, ttlMs = 0, referer = 'https://www.bilibi
 }
 
 /** 文本 GET（弹幕 list.so 返回 XML 不是 JSON，apiGet 吃不下）：同一套节流/熔断，不缓存 */
-export async function apiText(u, opts = {}) {
+export async function apiText(u: string, opts: ApiGetOptions = {}): Promise<string> {
   throwIfBanned()
   return (await guardedFetch(u, opts)).text()
 }
 
 /** 写操作 POST（点赞 / 投币 / 关注）：节流与熔断跟 apiGet 同一套；
  *  csrf 由调用方显式放进 body —— 这里不偷偷加，免得写错账号的事故被藏起来 */
-export async function apiPost(u, body, { cred, referer = 'https://www.bilibili.com/' } = {}) {
+export async function apiPost(u: string, body: Record<string, string | number>, { cred, referer = 'https://www.bilibili.com/' }: ApiGetOptions = {}): Promise<ApiEnvelope> {
   throwIfBanned()
-  const r = await guardedFetch(u, { cred, referer, method: 'POST', body: new URLSearchParams(body).toString() })
-  let data
-  try { data = await r.json() } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
+  const r = await guardedFetch(u, { cred, referer, method: 'POST', body: new URLSearchParams(body as Record<string, string>).toString() })
+  let data: ApiEnvelope
+  try { data = await r.json() as ApiEnvelope } catch { throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`) }
   return guardCode(data)
 }
 
 // ── WBI 签名（搜索要） ─────────────────────────────────────────────────────
 const MIXIN_TAB = [46,47,18,2,53,8,23,32,15,50,10,31,58,3,45,35,27,43,5,49,33,9,42,19,29,28,14,39,12,38,41,13,37,48,7,16,24,55,40,61,26,17,0,1,60,51,30,4,22,25,54,21,56,59,6,63,57,62,11,36,20,34,44,52]
-const keyOf = (u) => String(u).slice(String(u).lastIndexOf('/') + 1, String(u).lastIndexOf('.'))
-let wbiMixin = null
-async function wbiMixinOf(cred) {
+const keyOf = (u: string): string => String(u).slice(String(u).lastIndexOf('/') + 1, String(u).lastIndexOf('.'))
+let wbiMixin: string | null = null
+async function wbiMixinOf(cred: Cred): Promise<string> {
   if (wbiMixin) return wbiMixin
-  const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred, ttlMs: 10 * 60_000 })
+  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred, ttlMs: 10 * 60_000 })
   const raw = keyOf(nav.data?.wbi_img?.img_url ?? '') + keyOf(nav.data?.wbi_img?.sub_url ?? '')
   if (raw.length !== 64) throw new Error('WBI 签名密钥缺失（nav 未返回 wbi_img）—— 检查登录状态')
   wbiMixin = MIXIN_TAB.map((i) => raw[i]).join('').slice(0, 32)
   return wbiMixin
 }
-export async function wbi(params, cred) {
+export async function wbi(params: Record<string, string | number>, cred: Cred): Promise<string> {
   const mixin = await wbiMixinOf(cred)
   const wts = Math.round(Date.now() / 1000)
-  const clean = (v) => String(v).replace(/[!'()*]/g, '')
+  const clean = (v: string | number): string => String(v).replace(/[!'()*]/g, '')
   const q = Object.keys({ ...params, wts }).sort()
     .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(clean(k === 'wts' ? wts : params[k]))}`).join('&')
   return `${q}&w_rid=${crypto.createHash('md5').update(q + mixin).digest('hex')}`
@@ -220,34 +291,40 @@ export async function wbi(params, cred) {
 
 /** player v2（要 WBI 签名）：章节 view_points + 字幕列表。
  *  实测：AI 字幕列表要登录态才返回（匿名 subtitles 为空、need_login_subtitle=true） */
-export async function getPlayerInfo(bvid, cid, cred) {
+export async function getPlayerInfo(bvid: string, cid: number | string, cred: Cred): Promise<PlayerInfo> {
   const qs = await wbi({ bvid, cid }, cred)
-  const j = await apiGet(`https://api.bilibili.com/x/player/wbi/v2?${qs}`, {
+  const j = await apiGet<PlayerResp>(`https://api.bilibili.com/x/player/wbi/v2?${qs}`, {
     cred, ttlMs: 10 * 60_000, referer: `https://www.bilibili.com/video/${bvid}/`,
   })
   if (j.code !== 0) throw new Error(`player 接口 ${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
   return j.data ?? {}
 }
 
+export interface PlayStream { url: string; quality: number | undefined; segments: number; seconds: number }
+
+interface DurlItem { url?: string; length?: number }
+interface DashVideo { id?: number; baseUrl?: string; base_url?: string }
+interface PlayUrlData { quality?: number; durl?: DurlItem[]; dash?: { video?: DashVideo[] } }
+
 /** 播放直链（抽帧用）：先要 mp4（fnval=1，durl），拿不到再退 dash 的视频流。
  *  实测：qn=80 + platform=pc + high_quality=1 才给到 720P+；匿名只有 360P（抽帧也吃登录态）。
  *  走 plain playurl 而不是 wbi 版：实测 wbi 版在匿名/无 buvid 时直接 412（会误伤熔断），
  *  plain 版带 cookie + referer 就够（qn 由登录态决定）。
  *  返回 { url, quality, segments, seconds } —— seconds 是这条直链覆盖的时长（多段视频只有第一段） */
-export async function getPlayUrl(bvid, cid, cred, { qn = 80 } = {}) {
+export async function getPlayUrl(bvid: string, cid: number | string, cred: Cred, { qn = 80 }: { qn?: number } = {}): Promise<PlayStream> {
   const referer = `https://www.bilibili.com/video/${bvid}/`
-  const ask = async (fnval) => {
+  const ask = async (fnval: number): Promise<ApiEnvelope<PlayUrlData>> => {
     const qs = new URLSearchParams({
       bvid, cid: String(cid), qn: String(qn), fnval: String(fnval), fnver: '0', fourk: '1', platform: 'pc', high_quality: '1',
     })
-    return apiGet(`https://api.bilibili.com/x/player/playurl?${qs}`, { cred, referer })
+    return apiGet<ApiEnvelope<PlayUrlData>>(`https://api.bilibili.com/x/player/playurl?${qs}`, { cred, referer })
   }
   const j = await ask(1)
   if (Number(j.code) !== 0) throw new Error(`播放地址 ${explainCode(j.code)}${j.message ? '（' + j.message + '）' : ''}`)
   const durl = j.data?.durl ?? []
   if (durl.length) {
     return {
-      url: String(durl[0].url), quality: j.data.quality, segments: durl.length,
+      url: String(durl[0].url), quality: j.data?.quality, segments: durl.length,
       seconds: Math.round(Number(durl[0].length ?? 0) / 1000) || 0,
     }
   }
@@ -262,17 +339,21 @@ export async function getPlayUrl(bvid, cid, cred, { qn = 80 } = {}) {
 }
 
 /** 选一条字幕：人工 CC 优先（质量高），AI 生成兜底（覆盖广） */
-export const pickSubtitle = (info) => {
+export const pickSubtitle = (info: PlayerInfo | undefined | null): SubtitleItem | null => {
   const subs = info?.subtitle?.subtitles ?? []
   return subs.find((s) => !String(s.lan ?? '').startsWith('ai-')) ?? subs[0] ?? null
 }
 
+export interface SubtitleLine { from: number; to: number; text: string }
+interface RawSubtitleLine { from?: number; to?: number; content?: string }
+interface SubtitleJson { body?: RawSubtitleLine[] }
+
 /** 字幕正文 → [{ from, to, text }]（秒）。形状按防御式解析：字段缺失/为空就报错，由调用方降级 */
-export async function getSubtitleLines(bvid, sub, cred) {
+export async function getSubtitleLines(bvid: string, sub: SubtitleItem, cred: Cred): Promise<SubtitleLine[]> {
   let u = String(sub?.subtitle_url ?? '')
   if (!u) throw new Error('字幕地址为空')
   if (u.startsWith('//')) u = 'https:' + u
-  const j = await apiGet(u, { cred, ttlMs: 24 * 3600_000, referer: `https://www.bilibili.com/video/${bvid}/` })
+  const j = await apiGet<SubtitleJson>(u, { cred, ttlMs: 24 * 3600_000, referer: `https://www.bilibili.com/video/${bvid}/` })
   const lines = (Array.isArray(j?.body) ? j.body : [])
     .map((l) => ({ from: Number(l.from) || 0, to: Number(l.to) || 0, text: String(l.content ?? '').replace(/\s+/g, ' ').trim() }))
     .filter((l) => l.text)
@@ -280,15 +361,21 @@ export async function getSubtitleLines(bvid, sub, cred) {
   return lines
 }
 
+export interface DanmakuBrief {
+  count: number
+  top: Array<[string, number]>
+  dense: { from: number; n: number } | null
+}
+
 /** 弹幕速览：条数 + 热词 + 最热闹的一分钟 ——「哪里精彩」的社群信号（画面型视频也有的读）。
  *  实测：list.so 只回最近约 1200 条的窗口（stat.danmaku 是全量历史），速览够用 */
-export async function getDanmakuBrief(bvid, cid, cred, { topN = 10 } = {}) {
+export async function getDanmakuBrief(bvid: string, cid: number | string, cred: Cred, { topN = 10 }: { topN?: number } = {}): Promise<DanmakuBrief> {
   const xml = await apiText(`https://api.bilibili.com/x/v1/dm/list.so?oid=${cid}`, { cred, referer: `https://www.bilibili.com/video/${bvid}/` })
   const ds = [...xml.matchAll(/<d p="([^",]+)[^"]*">([\s\S]{1,200}?)<\/d>/g)]
   if (!ds.length) return { count: 0, top: [], dense: null }
-  const ent = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'" }
-  const dec = (s) => s.replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, e) => ent[e]).replace(/\s+/g, ' ').trim()
-  const freq = new Map()
+  const ent: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'" }
+  const dec = (s: string): string => s.replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, e: string) => ent[e]).replace(/\s+/g, ' ').trim()
+  const freq = new Map<string, number>()
   for (const t of ds.map((m) => dec(m[2])).filter(Boolean)) {
     for (const w of t.match(/[\u4e00-\u9fa5A-Za-z]{2,8}|\d{2,}/g) ?? []) {
       if (/^1+$|^233+$|^66+$|^77+$|^0+$/.test(w)) continue   // 刷屏数字不算热词
@@ -296,9 +383,9 @@ export async function getDanmakuBrief(bvid, cid, cred, { topN = 10 } = {}) {
     }
   }
   const top = [...freq.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, topN)
-  const buckets = new Map()
+  const buckets = new Map<number, number>()
   for (const m of ds) { const min = Math.floor((Number(m[1]) || 0) / 60); buckets.set(min, (buckets.get(min) ?? 0) + 1) }
-  let dense = null
+  let dense: { from: number; n: number } | null = null
   for (const [min, n] of buckets) if (!dense || n > dense.n) dense = { from: min * 60, n }
   return { count: ds.length, top, dense }
 }

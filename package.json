@@ -11,21 +11,29 @@
     "diary"
   ],
   "type": "module",
-  "main": "src/app/plugin.js",
+  "main": "dist/app/plugin.js",
   "exports": {
-    ".": "./src/app/plugin.js",
-    "./client": "./src/features/settings/client.js",
+    ".": "./dist/app/plugin.js",
+    "./client": "./dist/features/settings/client.js",
     "./package.json": "./package.json"
   },
   "files": [
-    "src",
+    "dist",
     "docs",
     "scripts",
     "cordis.patch.yml",
     "README.md"
   ],
   "scripts": {
-    "check": "node scripts/check-structure.mjs"
+    "build": "tsc -p tsconfig.build.json && bun scripts/postbuild.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "bun run typecheck && bun run build && bun scripts/check-structure.ts",
+    "cli": "bun src/features/bili-agent/bili.ts",
+    "prepack": "bun run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
   },
   "dsh": {
     "bundle": {

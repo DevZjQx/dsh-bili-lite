@@ -1,6 +1,6 @@
 # bili-pulse（心跳）
 
-**Purpose.** 让它「在场」，且节奏攥在它自己手里：宿主常驻，每分钟看两眼 —— 它自己排的计划（`~/.bili-lite/schedule.json`，agent 用 `bili.mjs schedule` 写）到点没：到点就投「计划拍」，拍里带上它自己写的标签，错过的补投；它什么都没排时，按 `pulse.everyMin`（默认 60）分钟投一拍中性的「现在想干嘛」当兜底。**计划非空时兜底节拍暂停**（它的计划替代默认节奏），`schedule clear` 后恢复。sessionId 固定为 `bili-lite`，跨天保留上下文。
+**Purpose.** 让它「在场」，且节奏攥在它自己手里：宿主常驻，每分钟看两眼 —— 它自己排的计划（`~/.bili-lite/schedule.json`，agent 用 `bili.ts schedule` 写）到点没：到点就投「计划拍」，拍里带上它自己写的标签，错过的补投；它什么都没排时，按 `pulse.everyMin`（默认 60）分钟投一拍中性的「现在想干嘛」当兜底。**计划非空时兜底节拍暂停**（它的计划替代默认节奏），`schedule clear` 后恢复。sessionId 固定为 `bili-lite`，跨天保留上下文。
 
 **Owns.** 每分钟 tick（计划拍优先 → 兜底节拍）；两种拍文案（人设前缀 + 现在几点 + 工具用法与克制的提醒；计划拍带它自己写的标签；抬头里的名字取 `persona.name`，可空 —— 插件不写死名字）；投递后的计划记账（`markFired`：投递失败不记账 → 下一拍重投）；`GET /dsh-bili-lite/api/status`（含 `plan` 概要，设置页展示用）。
 
@@ -8,7 +8,7 @@
 
 **Depends on.** `config/paths`（persona/workdir）、`config/store`（读配置）、`lib/schedule`（到期判断 / 记账 / 概要）；app 注入 `getSession` / `route` / `cliPath`。
 
-**Public surface.** `feature.js` 的 `startPulse()`，返回 `{ stop, status }`。
+**Public surface.** `feature.ts` 的 `startPulse()`，返回 `{ stop, status }`。
 
 **Owner.** 暂无专人（app owner 代管）。
 

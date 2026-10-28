@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // ============================================================================
 // 结构检查 —— 让防弹边界失败（SKILL §8 的无依赖实现）
 //
@@ -7,16 +7,18 @@
 //   2. src 顶层只允许 app / config / lib / features
 //   3. 共享层（config、lib）不得 import features 或 app
 //   4. feature 不得 import app
-//   5. 跨 feature 只能 import 对方入口：feature.(m)js，或带 shebang 的根级 .mjs
-//      （CLI 框架约定，如 bili-agent/bili.mjs）
-//   6. 浏览器半边（features/<x>/client.js）：单文件加载契约，不允许任何静态 import
-//   7. 每个 feature 必须有入口；全部源文件过 node --check
+//   5. 跨 feature 只能 import 对方入口：feature.ts，或带 shebang 的根级 .ts
+//      （CLI 框架约定，如 bili-agent/bili.ts）
+//   6. 浏览器半边（features/<x>/client.ts）：单文件加载契约，不允许任何静态 import
+//   7. 每个 feature 必须有入口
+//
+// 语法与类型不在这里查：`bun run check` 先跑 tsc（比逐文件 --check 更严格），
+// 这里只查「谁 import 谁」这类编译器不管的边界。
 //
 // 说明：import 识别用正则而非 AST —— 够用且零依赖；别在注释里写长得像
 // `from '…'` 的句子。
 // ============================================================================
 import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,32 +31,36 @@ const IMPORT_RES = [
   /import\(\s*['"]([^'"]+)['"]\s*\)/g,
 ]
 
-const rel = (f) => path.relative(ROOT, f)
-const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+type Layer = 'app' | 'feature' | 'shared' | 'unknown'
+interface Kind { layer: Layer; feature: string | null }
+
+const rel = (f: string): string => path.relative(ROOT, f)
+const isSource = (name: string): boolean => /\.ts$/.test(name) && !/\.d\.ts$/.test(name)
+const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
   const p = path.join(dir, d.name)
-  return d.isDirectory() ? walk(p) : (/\.(js|mjs)$/.test(d.name) ? [p] : [])
+  return d.isDirectory() ? walk(p) : (isSource(d.name) ? [p] : [])
 })
-const kindOf = (f) => {
+const kindOf = (f: string): Kind => {
   const [l1, l2] = path.relative(SRC, f).split(path.sep)
   if (l1 === 'app') return { layer: 'app', feature: null }
   if (l1 === 'features') return { layer: 'feature', feature: l2 }
   if (l1 === 'config' || l1 === 'lib') return { layer: 'shared', feature: null }
   return { layer: 'unknown', feature: null }
 }
-const resolveLocal = (from, spec) => {
+const resolveLocal = (from: string, spec: string): string | null => {
   const base = path.resolve(path.dirname(from), spec)
-  for (const c of [base, base + '.js', base + '.mjs']) {
+  for (const c of [base, base + '.ts', base + '.js', path.join(base, 'index.ts')]) {
     if (existsSync(c) && statSync(c).isFile()) return c
   }
   return null
 }
 
 const files = walk(SRC)
-const errors = []
+const errors: string[] = []
 
 // 1) 无 barrel 2) 顶层白名单
 for (const f of files) {
-  if (/index\.(js|mjs)$/.test(f)) errors.push(`${rel(f)}: 不允许 index barrel（每个模块只有一个入口）`)
+  if (/index\.ts$/.test(f)) errors.push(`${rel(f)}: 不允许 index barrel（每个模块只有一个入口）`)
   if (kindOf(f).layer === 'unknown') errors.push(`${rel(f)}: src 顶层只允许 app / config / lib / features`)
 }
 
@@ -62,8 +68,8 @@ for (const f of files) {
   const src = readFileSync(f, 'utf8')
   const { layer, feature } = kindOf(f)
   const isBrowserEntry = layer === 'feature'
-    && path.basename(f) === 'client.js'
-    && path.dirname(f) === path.join(SRC, 'features', feature)
+    && path.basename(f) === 'client.ts'
+    && path.dirname(f) === path.join(SRC, 'features', feature as string)
 
   // 6) 浏览器半边：零静态 import（require("react") 由加载器提供，不在此限）
   if (isBrowserEntry) {
@@ -94,31 +100,25 @@ for (const f of files) {
       }
       // 5) 跨 feature 只能走入口
       if (layer === 'feature' && t.layer === 'feature' && t.feature !== feature) {
-        const isEntry = /(^|\/)feature\.(js|mjs)$/.test(tRel) || path.basename(target) === 'bili.mjs'
+        const isEntry = /(^|\/)feature\.ts$/.test(tRel) || path.basename(target) === 'bili.ts'
         if (!isEntry) errors.push(`${rel(f)}: 跨 feature 深层 import（${tRel}）—— 只能走对方入口`)
       }
     }
   }
 }
 
-// 7a) 语法检查（全部文件，含浏览器半边）
-for (const f of files) {
-  const chk = spawnSync(process.execPath, ['--check', f], { encoding: 'utf8' })
-  if (chk.status !== 0) errors.push(`${rel(f)}: 语法错误\n${chk.stderr}`)
-}
-
-// 7b) 每个 feature 必须有入口
+// 7) 每个 feature 必须有入口
 const featuresDir = path.join(SRC, 'features')
 for (const d of readdirSync(featuresDir, { withFileTypes: true }).filter((x) => x.isDirectory())) {
   const dir = path.join(featuresDir, d.name)
-  const names = readdirSync(dir)
-  const hasEntry = names.some((n) => /^feature\.(js|mjs)$/.test(n))
-    || names.some((n) => n.endsWith('.mjs') && readFileSync(path.join(dir, n), 'utf8').startsWith('#!'))
-  if (!hasEntry) errors.push(`src/features/${d.name}: 缺公共入口（feature.(m)js，或带 shebang 的根级 .mjs）`)
+  const names = readdirSync(dir).filter(isSource)
+  const hasEntry = names.some((n) => /^feature\.ts$/.test(n))
+    || names.some((n) => n.endsWith('.ts') && readFileSync(path.join(dir, n), 'utf8').startsWith('#!'))
+  if (!hasEntry) errors.push(`src/features/${d.name}: 缺公共入口（feature.ts，或带 shebang 的根级 .ts）`)
 }
 
 if (errors.length) {
-  console.error(`✗ 结构检查 ${errors.length} 处：\n\n${errors.map((e) => '  · ' + e).join('\n')}\n`)
+  console.error(`✗ 结构检查 ${errors.length} 处：\\n\\n${errors.map((e) => '  · ' + e).join('\\n')}\\n`)
   process.exit(1)
 }
-console.log(`✓ 结构检查通过（${files.length} 个源文件：shared → features → app 方向不可逆 · 无 barrel · 浏览器半边零 import · 语法全过）`)
+console.log(`✓ 结构检查通过（${files.length} 个源文件：shared → features → app 方向不可逆 · 无 barrel · 浏览器半边零 import）`)
