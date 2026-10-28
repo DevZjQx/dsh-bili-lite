@@ -156,14 +156,14 @@ window.__ModuleLoader__.load({
       const pulse = status?.pulse;
       const planLine = !pulse?.plan ? "" : pulse.plan.pending > 0
         ? ` · 它自己排了 ${pulse.plan.pending} 条计划（兜底拍暂停），下一拍 ${pulse.plan.nextDueText ?? "?"} ${pulse.plan.nextWhenText ?? ""}`
-        : " · 它没排计划（按兜底节拍来）";
+        : " · 它还没排作息（按兜底节拍来）";
       const pulseLine = !status ? "" : !pulse?.ok ? "心跳未启动（重启 DSH 试试）"
         : `每 ${pulse.everyMin} 分钟一拍 · 共 ${pulse.beats} 拍` + (pulse.lastBeatText ? ` · 上一拍 ${pulse.lastBeatText}` : " · 下一拍马上来") + planLine;
 
       return h("div", { className: "bll" },
         h("h3", { className: "bll-title" }, "B站小鲤"),
         h("p", { className: "bll-intro" },
-          "极简版「与 AI 共用 B 站号」：它从不睡觉 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
+          "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
         pulseLine ? h("div", { className: "bll-hint" }, "💓 " + pulseLine) : null,
         cred ? h("div", { className: "bll-hint" }, cred.present
           ? `当前账号：${cfg.self?.name || "?"}（mid ${cfg.self?.mid || "?"}）${cred.hasSess && cred.hasJct ? " ✓" : " ⚠️ 凭据缺字段"}`

@@ -1,5 +1,5 @@
 /**
- * dsh-bili-lite · bili-pulse —— 心跳（从不睡觉的那一半）—— 本 feature 的公共入口
+ * dsh-bili-lite · bili-pulse —— 心跳（照它自己规划的作息投拍的那一半）—— 本 feature 的公共入口
  *
  * 「什么时候看」的决定权还是全在它手里，现在有两个来源，都攥在它自己手中：
  *   · 计划拍：它用 `node bili.mjs schedule …` 自己排的作息 / 定时任务（lib/schedule 是唯一
@@ -53,8 +53,8 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   function beatText(cfg) {
     const now = new Date().toLocaleString('zh-CN', { hour12: false })
     return commonText(cfg, `【小鱼心跳】现在是 ${now}。`) + '\n' + [
-      '这一拍是兜底节拍（你没排计划时宿主才问）：想不想看、什么时候看、今天看几条，全部你自己定 —— 可以开始刷、可以继续昨天没看完的、也可以什么都不干（什么都不干也是完整的一拍）。',
-      '想把节奏拿回自己手里：node ' + cliPath + ' schedule add --daily 21:00 --label "晚刷" —— 自己排作息 / 定时任务，排了宿主就只按你的计划投拍（这条兜底节拍暂停），schedule clear 后恢复。排不排都行。',
+      '这一拍是兜底节拍（你还没排作息时宿主才问）：想不想看、什么时候看、今天看几条，全部你自己定 —— 可以开始刷、可以继续昨天没看完的、也可以什么都不干（什么都不干也是完整的一拍）。',
+      '作息该你自己规划：node ' + cliPath + ' schedule add --daily 21:00 --label "晚刷" —— 什么时候活跃、什么时候歇着，用计划排出来，排了宿主就只按你的作息投拍（这条兜底节拍暂停），schedule clear 后恢复。排不排都行。',
     ].join('\n')
   }
 

@@ -1,6 +1,6 @@
 # dsh-bili-lite 0.1.0
 
-> 极简版「让 AI 自己运营 B 站」：给 DSH 装一条小鱼 —— 它**从不睡觉**：什么时候刷、
+> 极简版「让 AI 自己运营 B 站」：给 DSH 装一条小鱼 —— 它**自己规划作息**：什么时候刷、
 > 看什么、看不看，全部它自己定；刷候选、真看懂（章节 + 字幕 + 弹幕热词 + 热评）、
 > 写日记，把**值得的发一条评论**。
 >
@@ -132,7 +132,7 @@ src/
 │   └── http.js
 └── features/
     ├── settings/                # 设置壳：宿主 API + 浏览器 section（docs/features/settings.md）
-    ├── bili-pulse/              # 心跳：固定节拍问一拍，ai never sleeps（docs/features/bili-pulse.md）
+    ├── bili-pulse/              # 心跳：照它排的作息投拍，没排作息时兜底问一拍（docs/features/bili-pulse.md）
     └── bili-agent/              # agent CLI：看/评/日记/账本（docs/features/bili-agent.md）
 ```
 
