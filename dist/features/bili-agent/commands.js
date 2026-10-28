@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config, writeConfig, DEFAULTS } from '../../config/store.js';
 import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js';
-import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js';
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js';
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
 import { writesToday, interactionsToday, interactedWithin, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js';
@@ -511,13 +511,8 @@ export async function cmdComment(flags, positional) {
         process.exit(4);
     }
     console.log(`登录态 ✓ ${nav.data.uname}（mid ${nav.data.mid}）`);
-    const r = await fetch(url, {
-        method: 'POST',
-        headers: { 'user-agent': UA, referer: `https://www.bilibili.com/video/${bvid}/`, cookie: cookieHeader(cred), 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams(body).toString(),
-        signal: AbortSignal.timeout(30000),
-    });
-    const j = await r.json().catch(() => ({ code: -1, message: '非 JSON 响应' }));
+    // 走 lib 的 apiPost（不自己 fetch）：Origin / csrf 预检 / 风控码熔断都只有那一处
+    const j = await apiPost(url, body, { cred, referer: `https://www.bilibili.com/video/${bvid}/` });
     if (Number(j.code) !== 0) {
         console.error(`✗ 发送失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`);
         process.exit(5);

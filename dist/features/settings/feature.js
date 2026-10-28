@@ -141,7 +141,7 @@ export function registerSettings({ route, isTrusted, cliPath }) {
                 return;
             }
             // 先验证、后落盘：验证不过就一个字节都不写，原登录态原样保留（qrcode_key 一次性，失败后让用户重扫）
-            const cred = parseCookie({ sessdata: st.cred.sessdata, bili_jct: st.cred.bili_jct, buvid3: st.cred.buvid3 });
+            const cred = parseCookie({ sessdata: st.cred.sessdata, bili_jct: st.cred.bili_jct, buvid3: st.cred.buvid3, buvid4: st.cred.buvid4 });
             const self = await whoami(cred);
             saveCred(cred);
             writeConfig({ ...config(), self });

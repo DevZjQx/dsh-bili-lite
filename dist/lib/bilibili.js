@@ -13,7 +13,9 @@ import { config } from '../config/store.js';
 import { DATA_DIR, CRED_FILE, BAN_FILE, CACHE_FILE } from '../config/paths.js';
 import { readJson, writeJson } from './json-file.js';
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}` + (cred.buvid3 ? `; buvid3=${cred.buvid3}` : ''); // 空 buvid3 不发（扫码拿不到时别发个空值）
+export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}`
+    + (cred.buvid3 ? `; buvid3=${cred.buvid3}` : '') // 空 buvid 不发（扫码拿不到时别发个空值）
+    + (cred.buvid4 ? `; buvid4=${cred.buvid4}` : ''); // 设备指纹：写接口比读接口更认它，有就带上
 // ── 凭据（trim、查缺、不回显） ─────────────────────────────────────────────
 export function loadCred() {
     let j;
@@ -24,7 +26,7 @@ export function loadCred() {
         throw new Error(`没有凭据文件：${CRED_FILE}\n  去设置页「B站养鱼」粘贴一次 cookie ✓（SESSDATA 是 HttpOnly，必须 F12 手动复制 ✗）`);
     }
     const clean = (v) => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '');
-    return { sessdata: clean(j.sessdata), bili_jct: clean(j.bili_jct), buvid3: clean(j.buvid3) };
+    return { sessdata: clean(j.sessdata), bili_jct: clean(j.bili_jct), buvid3: clean(j.buvid3), buvid4: clean(j.buvid4) };
 }
 /** 凭据落盘（0600）：设置页验证后与扫码成功后共用这一条路，不各写一份 */
 export function saveCred(cred) {
@@ -52,7 +54,7 @@ export async function qrGenerate() {
     return { url: String(j.data.url), qrcodeKey: String(j.data.qrcode_key) };
 }
 /** 从 Set-Cookie 里挑凭据：扫码成功时 B 站用 Set-Cookie 下发 SESSDATA / bili_jct / DedeUserID，
- *  且 buvid3 只在这里出现；data.url 现在是一张 ticket 链接，query 里已经不带凭据了 */
+ *  且 buvid3 / buvid4 只在这里出现；data.url 现在是一张 ticket 链接，query 里已经不带凭据了 */
 function credFromSetCookie(res) {
     const raw = typeof res.headers.getSetCookie === 'function'
         ? res.headers.getSetCookie()
@@ -64,7 +66,7 @@ function credFromSetCookie(res) {
         if (i > 0)
             jar[pair.slice(0, i).trim().toLowerCase()] = pair.slice(i + 1).trim();
     }
-    return { sessdata: jar.sessdata, bili_jct: jar.bili_jct, buvid3: jar.buvid3, mid: jar.dedeuserid };
+    return { sessdata: jar.sessdata, bili_jct: jar.bili_jct, buvid3: jar.buvid3, buvid4: jar.buvid4, mid: jar.dedeuserid };
 }
 /** 轮询一次：waiting 未扫码 / scanned 已扫码待确认 / expired 已过期 / done 成功（带凭据）。
  *  现行响应：外层 code 恒 0（"OK"），真正的登录状态在 data.code（86101/86090/86038/0） */
@@ -103,6 +105,7 @@ export async function qrPoll(qrcodeKey) {
         sessdata: jar.sessdata || param('SESSDATA'),
         bili_jct: jar.bili_jct || param('bili_jct'),
         buvid3: jar.buvid3 || param('buvid3'),
+        buvid4: jar.buvid4 || param('buvid4'),
     };
     if (!cred.sessdata || !cred.bili_jct) {
         throw new Error('扫码成功但 B 站没下发 cookie（Set-Cookie 里没有 SESSDATA / bili_jct）—— 重扫一次；还不行就用手动粘贴 cookie');
@@ -115,6 +118,7 @@ const CODE_HINTS = {
     '-101': '账号未登录 —— SESSDATA 失效了，重新复制一次 cookie',
     '-111': 'CSRF 校验失败 —— bili_jct 和当前 SESSDATA 不是同一个账号，两个都要重抄',
     '-400': '请求参数错误',
+    '-401': '未认证 / 非法请求 —— 写接口不认这次请求：多半是 bili_jct 与 SESSDATA 不配套或已残缺（两条一起重抄），也可能是账号被限制了互动；不是风控，也没花掉额度',
     '-352': '风控拦截 —— 请求太快或太像机器人，等几分钟',
     '-799': '请求过于频繁 —— 退避一会儿',
     '10031': '操作太快（频率限制）—— 退避，别连发',
@@ -133,6 +137,13 @@ export const explainCode = (code) => CODE_HINTS[String(code)] ?? `code=${code}�
 // ── 请求保护：节流 + 熔断 + 一点缓存 ───────────────────────────────────────
 const BAN_CODES = new Set([-412, -352, -799, -509]);
 const sleep = (ms) => new Promise((r) => { setTimeout(r, ms); });
+/** Origin 跟 Referer 同源：浏览器发的 POST 一定带，缺了容易被写接口判「非法访问」 */
+const originOf = (u) => { try {
+    return new URL(u).origin;
+}
+catch {
+    return 'https://www.bilibili.com';
+} };
 const banState = () => readJson(BAN_FILE, {});
 export const banUntil = () => Number(banState().until ?? 0);
 export const banWhy = () => banState().why ?? '未知原因';
@@ -168,6 +179,7 @@ async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', me
     lastRequestAt = Date.now();
     const headers = {
         'user-agent': UA, referer,
+        ...(method === 'GET' ? {} : { origin: originOf(referer) }), // 写请求补 Origin（GET 浏览器本来也不发）
         ...(cred ? { cookie: cookieHeader(cred) } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
     };
@@ -226,10 +238,15 @@ export async function apiText(u, opts = {}) {
     throwIfBanned();
     return (await guardedFetch(u, opts)).text();
 }
-/** 写操作 POST（点赞 / 投币 / 关注）：节流与熔断跟 apiGet 同一套；
+/** 写操作 POST（点赞 / 投币 / 关注 / 评论）：节流与熔断跟 apiGet 同一套；
  *  csrf 由调用方显式放进 body —— 这里不偷偷加，免得写错账号的事故被藏起来 */
 export async function apiPost(u, body, { cred, referer = 'https://www.bilibili.com/' } = {}) {
     throwIfBanned();
+    // csrf 先在本地挡一次：复制半截的 bili_jct 发出去只会换来 -111 / -401，白发一趟还要回滚判断
+    const csrf = 'csrf' in body ? String(body.csrf) : '';
+    if (csrf && !/^[0-9a-fA-F]{32}$/.test(csrf)) {
+        throw new Error('csrf（bili_jct）不是 32 位十六进制 —— 多半是 cookie 复制时被截断了：SESSDATA 与 bili_jct 两条一起重抄，别只换一条');
+    }
     const r = await guardedFetch(u, { cred, referer, method: 'POST', body: new URLSearchParams(body).toString() });
     let data;
     try {
@@ -238,7 +255,8 @@ export async function apiPost(u, body, { cred, referer = 'https://www.bilibili.c
     catch {
         throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`);
     }
-    return guardCode(data);
+    guardCode(data);
+    return data;
 }
 // ── WBI 签名（搜索要） ─────────────────────────────────────────────────────
 const MIXIN_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52];

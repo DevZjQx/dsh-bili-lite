@@ -13,7 +13,7 @@ export interface CredState { present: boolean; hasSess: boolean; hasJct: boolean
 export function credState(): CredState {
   try {
     const c = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8')) as Partial<Cred>
-    return { present: true, hasSess: !!c.sessdata, hasJct: !!c.bili_jct, hasBuvid: !!c.buvid3 }
+    return { present: true, hasSess: !!c.sessdata, hasJct: !!c.bili_jct, hasBuvid: !!(c.buvid3 || c.buvid4) }
   } catch { return { present: false, hasSess: false, hasJct: false, hasBuvid: false } }
 }
 
@@ -28,6 +28,7 @@ export function parseCookie(input: Record<string, unknown> = {}): Cred {
     sessdata: pick(input.sessdata, 'SESSDATA'),
     bili_jct: pick(input.bili_jct, 'bili_jct'),
     buvid3: pick(input.buvid3, 'buvid3'),
+    buvid4: pick(input.buvid4, 'buvid4'),
   }
   if (cred.sessdata.length < 20 || cred.sessdata.length > 8192
     || !/^[0-9a-fA-F]{32}$/.test(cred.bili_jct)

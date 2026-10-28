@@ -7,7 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { config, writeConfig, DEFAULTS } from '../../config/store.ts'
 import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.ts'
-import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.ts'
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.ts'
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.ts'
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.ts'
 import { writesToday, interactionsToday, interactedWithin, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.ts'
@@ -424,13 +424,8 @@ export async function cmdComment(flags: Flags, positional: string[]): Promise<vo
   const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred })
   if (nav.code !== 0 || nav.data?.isLogin !== true) { console.error(`✗ 登录态失效：${explainCode(nav.code)} —— 重抄 cookie 再来`); process.exit(4) }
   console.log(`登录态 ✓ ${nav.data!.uname}（mid ${nav.data!.mid}）`)
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'user-agent': UA, referer: `https://www.bilibili.com/video/${bvid}/`, cookie: cookieHeader(cred), 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(30000),
-  })
-  const j = await r.json().catch(() => ({ code: -1, message: '非 JSON 响应' }))
+  // 走 lib 的 apiPost（不自己 fetch）：Origin / csrf 预检 / 风控码熔断都只有那一处
+  const j = await apiPost<{ rpid?: number }>(url, body, { cred, referer: `https://www.bilibili.com/video/${bvid}/` })
   if (Number(j.code) !== 0) { console.error(`✗ 发送失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`); process.exit(5) }
   ledgerAppend({ type: 'comment', bvid, target: `BV:${bvid}`, note: message.slice(0, 60) })
   console.log(`✓ 已发出（rpid ${j.data?.rpid ?? '?'}）· 今天已写 ${wrote.length + 1}/${limit}`)

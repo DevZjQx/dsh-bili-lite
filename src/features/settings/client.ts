@@ -99,7 +99,7 @@ loader.load({
     function BiliLiteSection() {
       const [cfg, setCfg] = useState<SectionConfig | null>(null);
       const [saved, setSaved] = useState<string | null>(null);
-      const [ck, setCk] = useState({ sessdata: "", bili_jct: "", buvid3: "" });
+      const [ck, setCk] = useState({ sessdata: "", bili_jct: "", buvid3: "", buvid4: "" });
       const [cred, setCred] = useState<CredState | null>(null);
       const [busy, setBusy] = useState("");
       const [err, setErr] = useState("");
@@ -142,7 +142,7 @@ loader.load({
           const r = await fetch(`${API}/cookie`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(ck) });
           const d = await r.json() as DetailResp;
           if (!d.ok) throw new Error(d.error || "写入失败");
-          setOkMsg("✓ " + d.detail); setCk({ sessdata: "", bili_jct: "", buvid3: "" }); load();
+          setOkMsg("✓ " + d.detail); setCk({ sessdata: "", bili_jct: "", buvid3: "", buvid4: "" }); load();
         } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
       }, [ck, load]);
@@ -234,6 +234,7 @@ loader.load({
             h("input", { ...ci, type: "password", placeholder: "SESSDATA", value: ck.sessdata, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, sessdata: e.target.value })) }),
             h("input", { ...ci, type: "password", placeholder: "bili_jct", value: ck.bili_jct, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, bili_jct: e.target.value })) }),
             h("input", { ...ci, type: "password", placeholder: "buvid3（可空）", value: ck.buvid3, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, buvid3: e.target.value })) }),
+            h("input", { ...ci, type: "password", placeholder: "buvid4（可空）", value: ck.buvid4, onChange: (e: { target: { value: string } }) => setCk((s) => ({ ...s, buvid4: e.target.value })) }),
             h("button", { className: "bll-btn bll-btn2", onClick: saveCookie, disabled: !!busy || !ck.sessdata || !ck.bili_jct },
               busy === "cookie" ? "验证中…" : "写入凭据（先验证再保存）"))),
 

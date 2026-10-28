@@ -58,7 +58,7 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 
 1. **登录** —— 点「显示二维码」，手机 B 站 App 扫一扫确认即可（凭据自动验证并写入）。
    手机不在手边时手动粘 cookie 兑底：在 `bilibili.com` 按 **F12 → Application → Cookies → bilibili.com**，
-   手动复制 `SESSDATA`、`bili_jct`、`buvid3`（可空）粘进设置页，点「写入凭据」。
+   手动复制 `SESSDATA`、`bili_jct`、`buvid3` / `buvid4`（后两个可空，但有的话写操作更稳）粘进设置页，点「写入凭据」。
    ⚠️ 别用 `document.cookie` ✗ —— `SESSDATA` 是 **HttpOnly**，脚本里读不到。
 2. **点「启动自检」** —— 它会真的请求一次 B 站验证登录态。
 
