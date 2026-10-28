@@ -57,8 +57,8 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
                           （需要 ffmpeg；没装就只这一条用不了，其余照常）
   comment <BV> --message "…" --dry|--go
                           发一条评论（必须 --dry 或 --go）
-  interact <BV|UID> --like | --coin [1|2] | --follow [--undo] [--dry|--go]
-                          点赞 / 投币 / 关注（--undo 取消赞、取关；币收不回没有 --undo）
+  interact <BV|UID> --like | --follow [--undo] [--dry|--go]
+                          点赞 / 关注（--undo 取消赞、取关）
                           一次只做一件；写操作必须 --dry 或 --go
   diary <text…> | show    写日记 / 看最近
   ledger                  今天的额度账本
@@ -522,23 +522,22 @@ export async function cmdComment(flags, positional) {
     console.log(`✓ 已发出（rpid ${j.data?.rpid ?? '?'}）· 今天已写 ${wrote.length + 1}/${limit}`);
     console.log('把这条也记进 diary ✓（说了什么、为什么值得）');
 }
-// ── interact：点赞 / 投币 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
-// 三种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
+// ── interact：点赞 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
+// 两种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
 // 是在纠正前面的动作，不占额度也不判重 —— 但仍要 --dry / --go 与同一套节流熔断。
-const INTERACT_USAGE = `用法: bun bili.ts interact <BV|UID> (--like | --coin [1|2] | --follow) [--undo] [--dry|--go]
+const INTERACT_USAGE = `用法: bun bili.ts interact <BV|UID> (--like | --follow) [--undo] [--dry|--go]
   --like        点赞（--undo = 取消赞）
-  --coin [1|2]  投币，默认 1 个（币投出去收不回 —— 没有 --undo）
   --follow      关注这条视频的 UP（目标写成 UID 也行；--undo = 取关）
   一次只做一件事；写操作必须 --dry（只打印）或 --go（真的做）`;
-const ACT_TEXT = { like: '点赞', coin: '投币', follow: '关注' };
+const ACT_TEXT = { like: '点赞', follow: '关注' };
 export async function cmdInteract(flags, positional) {
     const target = String(positional[0] ?? '');
     const dry = flags.has('dry') || flags.get('dry') === true;
     const go = flags.has('go') || flags.get('go') === true;
     const undo = flags.has('undo') || flags.get('undo') === true;
-    const picked = ['like', 'coin', 'follow'].filter((k) => flags.has(k));
+    const picked = ['like', 'follow'].filter((k) => flags.has(k));
     if (picked.length !== 1) {
-        console.error(`✗ 一次只做一件事（--like / --coin / --follow 选一个）\n\n${INTERACT_USAGE}`);
+        console.error(`✗ 一次只做一件事（--like / --follow 选一个）\n\n${INTERACT_USAGE}`);
         process.exit(2);
     }
     if (dry && go) {
@@ -550,23 +549,10 @@ export async function cmdInteract(flags, positional) {
         process.exit(2);
     }
     const action = picked[0];
-    if (undo && action === 'coin') {
-        console.error('✗ 币投出去收不回 —— 投币没有 --undo（额度就这么用掉了，下次先 --dry 看一眼）');
-        process.exit(2);
-    }
     const isBv = BV_RE.test(target);
     if (!isBv && !(action === 'follow' && /^\d{1,12}$/.test(target))) {
         console.error(`✗ 目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}\n\n${INTERACT_USAGE}`);
         process.exit(2);
-    }
-    let n = 1;
-    if (action === 'coin') {
-        const raw = flags.get('coin');
-        n = raw === true ? 1 : Number(raw);
-        if (![1, 2].includes(n)) {
-            console.error('✗ --coin 只能投 1 或 2 个');
-            process.exit(2);
-        }
     }
     const cfg = config();
     if (cfg.share?.enabled === false) {
@@ -579,7 +565,7 @@ export async function cmdInteract(flags, positional) {
         console.error(`凭据缺 ${miss.join(', ')} —— 写操作必须要，去设置页补`);
         process.exit(3);
     }
-    // 视频类互动要拿 aid（点赞/投币接口只认 aid）与 UP 的 mid（关注）；只读，--dry 也要这一步
+    // 视频类互动要拿 aid（点赞接口只认 aid）与 UP 的 mid（关注）；只读，--dry 也要这一步
     const v = isBv ? await getView(target, cred) : {};
     const fid = action !== 'follow' ? '' : (isBv ? String(v.owner?.mid ?? '') : target);
     if (action === 'follow' && !fid) {
@@ -592,7 +578,7 @@ export async function cmdInteract(flags, positional) {
     }
     const key = action === 'follow' ? `uid:${fid}` : target;
     const where = isBv ? `《${v.title}》（${target}）` : `UID ${fid}`;
-    const what = `${undo ? '取消' : ''}${ACT_TEXT[action]}${action === 'coin' ? ` ${n} 个` : ''}`;
+    const what = `${undo ? '取消' : ''}${ACT_TEXT[action]}`;
     const limit = Math.max(0, Number(cfg.quota?.interactDaily ?? DEFAULTS.quota.interactDaily));
     const acted = interactionsToday();
     if (!undo) {
@@ -610,10 +596,6 @@ export async function cmdInteract(flags, positional) {
     if (action === 'like') {
         url = 'https://api.bilibili.com/x/web-interface/archive/like';
         body = { aid: String(v.aid), like: undo ? '2' : '1', csrf: cred.bili_jct };
-    }
-    else if (action === 'coin') {
-        url = 'https://api.bilibili.com/x/web-interface/coin/add';
-        body = { aid: String(v.aid), multiply: String(n), select_like: '0', csrf: cred.bili_jct };
     }
     else {
         url = 'https://api.bilibili.com/x/relation/modify';
@@ -638,10 +620,6 @@ export async function cmdInteract(flags, positional) {
     if (action === 'follow' && String(nav.data.mid) === fid) {
         console.error('✗ 这是你自己（与主人共用的号）—— 不能关注自己');
         process.exit(2);
-    }
-    if (action === 'coin' && nav.data.money !== undefined && Number(nav.data.money) < n) {
-        console.error(`✗ 硬币不够：账上 ${nav.data.money} 个，要投 ${n} 个 —— 别投`);
-        process.exit(3);
     }
     console.log(`登录态 ✓ ${nav.data.uname}（mid ${nav.data.mid}）`);
     const j = await apiPost(url, body, { cred, referer });
@@ -757,7 +735,7 @@ export function cmdTaste(flags) {
     const earliest = log.length ? day(log[0].at) : null;
     console.log(`口味回顾（最近 ${days} 天；账本共 ${log.length} 条${earliest ? `，最早到 ${earliest}` : ''}）`);
     const byAct = (a) => acts.filter((x) => x.action === a).length;
-    console.log(`看过 ${watched.length} 条 · 评论 ${comments.length} 条 · 互动 ${acts.length} 次${acts.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`);
+    console.log(`看过 ${watched.length} 条 · 评论 ${comments.length} 条 · 互动 ${acts.length} 次${acts.length ? `（赞 ${byAct('like')} · 关注 ${byAct('follow')}）` : ''}`);
     if (!watched.length && !comments.length && !acts.length) {
         console.log('\n（这段时间还没留下记录 —— 去看几条、写点什么，再回来回顾）');
         return;
@@ -801,7 +779,7 @@ export function cmdLedger() {
     const ilimit = Math.max(0, Number(config().quota?.interactDaily ?? DEFAULTS.quota.interactDaily));
     const acted = interactionsToday();
     const byAct = (a) => acted.filter((x) => x.action === a).length;
-    console.log(`互动：${acted.length}/${ilimit} 次${acted.length ? `（赞 ${byAct('like')} · 币 ${byAct('coin')} · 关注 ${byAct('follow')}）` : ''}`);
+    console.log(`互动：${acted.length}/${ilimit} 次${acted.length ? `（赞 ${byAct('like')} · 关注 ${byAct('follow')}）` : ''}`);
     for (const x of acted)
         console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.note ?? x.action}`);
     const recent = led.log.filter((x) => x.type === 'watch' && new Date(x.at).toLocaleDateString('sv-SE') === today());

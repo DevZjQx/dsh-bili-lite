@@ -4,7 +4,7 @@
 >
 > 极简版「让 AI 自己运营 B 站」：给 DSH 装一个 B 站分身 —— 它**自己规划作息**：什么时候刷、
 > 看什么、看不看，全部它自己定；刷候选、真看懂（章节 + 字幕 + 弹幕热词 + 热评）、
-> 写日记；值得的发一条评论，真喜欢就点个赞 / 投个币 / 关注 UP。
+> 写日记；值得的发一条评论，真喜欢就点个赞 / 关注 UP。
 >
 > **单账号模型**：AI 与主人**共用一个号** —— 它发的每条评论、每个赞都以你的身份出现，
 > 你自己都看得到，不需要、也不会去 @ 谁。
@@ -19,7 +19,7 @@
 - **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜，不给就热门里挑，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
 - **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
 - **写日记**：`~/.dsh/bili-lite-work/diary.md`，一天几段
-- **互动**：真喜欢就点赞 / 投 1–2 个币 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
+- **互动**：真喜欢就点赞 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；先 `--dry` 看一眼再 `--go`）
 - **克制**：撞到风控（412 / 验证码 / 限流）**立刻熔断停手**
 
@@ -70,7 +70,7 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 这个插件是**单账号模型**：AI 和你用同一个 B 站号，它发的每一条评论都以你的身份公开出现 ——
 不 @ 谁，也没有第二个号。三点建议：
 
-- 它的评论、点赞、投币、关注都记在**你的号**上，说错话是你在承担：把「每天最多写几条 / 互动几次」设小一点
+- 它的评论、点赞、关注都记在**你的号**上，说错话是你在承担：把「每天最多写几条 / 互动几次」设小一点
   （评论默认 3、互动默认 10；想更稳就调小；设 0 = 只看、只写日记、不发言）
 - 它不会用 @ 去招呼陌生人（工具里写死：评论正文带 @ 直接拒绝）✓
 - 它每天写在哪：`~/.dsh/bili-lite-work/diary.md` —— 那是它干了什么的入口，也是它的心里话
@@ -119,8 +119,8 @@ bun src/features/bili-agent/bili.ts video <BV>     # 看懂一条：章节/字�
 bun src/features/bili-agent/bili.ts video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
 bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
 bun src/features/bili-agent/bili.ts comment <BV> --message "…" --dry|--go
-bun src/features/bili-agent/bili.ts interact <BV|UID> --like|--coin [1|2]|--follow [--undo] --dry|--go
-                                                     # 点赞 / 投币 / 关注（一次一件；--undo 取消赞、取关）
+bun src/features/bili-agent/bili.ts interact <BV|UID> --like|--follow [--undo] --dry|--go
+                                                     # 点赞 / 关注（一次一件；--undo 取消赞、取关）
 bun src/features/bili-agent/bili.ts diary <text…>  # 写日记 / diary show 看
 bun src/features/bili-agent/bili.ts ledger         # 今天的额度账本
 bun src/features/bili-agent/bili.ts taste [--days 30]  # 口味回顾：看过的 / 常看的 UP / 动过手的（只读）
@@ -209,7 +209,7 @@ src/
 |---|---|---|
 | 代码文件 | ~50 个 | ~17 个（3 个运行面） |
 | 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评+抽帧九宫格（要 ffmpeg，可选：没装就只少画面这一路） |
-| 写 | 评论/私信/弹幕/动态/收藏/三连 | 评论 + 点赞/投币/关注（限额 + 判重） |
+| 写 | 评论/私信/弹幕/动态/收藏/三连 | 评论 + 点赞/关注（限额 + 判重） |
 | 登录 | 扫码 + 手动 cookie | 扫码 + 手动 cookie（同一份二维码编码器，终端出图形、设置页出 SVG） |
 | 监听 | 评论/私信/直播间轮询 | 无（只有心跳） |
 | 限额/熔断/判重 | ✓ | ✓（同样写死） |

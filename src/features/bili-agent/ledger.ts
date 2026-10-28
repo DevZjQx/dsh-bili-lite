@@ -15,7 +15,7 @@ export interface LedgerEntry {
   bvid?: string
   /** interact 的判重键：BV 号或 uid:<mid> */
   target?: string
-  /** interact 的动作：like / coin / follow */
+  /** interact 的动作：like / follow */
   action?: string
   /** 取消类（取消赞 / 取关）：不占额度，也不参与判重 */
   undo?: true
@@ -41,7 +41,7 @@ export function writesToday(): LedgerEntry[] {
   return readLedger().log.filter((x) => x.type === 'comment' && new Date(x.at).toLocaleDateString('sv-SE') === today())
 }
 
-/** 今天做过的互动（赞 / 币 / 关注）—— 取消类不算额度 */
+/** 今天做过的互动（赞 / 关注）—— 取消类不算额度 */
 export function interactionsToday(): LedgerEntry[] {
   return readLedger().log.filter((x) => x.type === 'interact' && !x.undo
     && new Date(x.at).toLocaleDateString('sv-SE') === today())

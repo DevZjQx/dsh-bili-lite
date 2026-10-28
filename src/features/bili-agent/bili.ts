@@ -14,8 +14,8 @@
 //                                       抽帧九宫格：等间隔抽 N 帧拼一张图（要 ffmpeg，可选）
 //   bun bili.ts comment <BV> --message "…" --dry|--go
 //                                       发一条评论（必须显式 --dry 或 --go）
-//   bun bili.ts interact <BV|UID> --like | --coin [1|2] | --follow [--undo] [--dry|--go]
-//                                       点赞 / 投币 / 关注（一次一件；同样先 --dry 再 --go）
+//   bun bili.ts interact <BV|UID> --like | --follow [--undo] [--dry|--go]
+//                                       点赞 / 关注（一次一件；同样先 --dry 再 --go）
 //   bun bili.ts diary <text…>         写日记 / diary show 看最近
 //   bun bili.ts ledger                今天的额度账本
 //   bun bili.ts taste [--days 30]     口味回顾：看过的 / 常看的 UP / 动过手的（只读，自己判断）

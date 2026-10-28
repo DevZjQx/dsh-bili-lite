@@ -158,7 +158,7 @@ export async function qrPoll(qrcodeKey: string): Promise<QrPollResult> {
     throw new Error('扫码成功但 B 站没下发 cookie（Set-Cookie 里没有 SESSDATA / bili_jct）—— 重扫一次；还不行就用手动粘贴 cookie')
   }
   // 扫码只给 buvid3；buvid4 单独问一次指纹接口补上。取不到不算失败 —— 两个都是可选的，
-  // 缺了只是写接口（点赞 / 投币 / 关注）更容易被判成「非法访问」
+  // 缺了只是写接口（点赞 / 关注）更容易被判成「非法访问」
   try {
     const fp = await fingerSpi(cred)
     cred.buvid3 ||= fp.buvid3
@@ -189,10 +189,6 @@ const CODE_HINTS: Record<string, string> = {
   '12015': '需要验证码 —— 停下，人在浏览器里手动过一次',
   '12051': '疑似刷屏 —— 停下，别再发',
   '12002': '评论区已关闭 / 不能评论',
-  '34002': '不能给自己的视频投币',
-  '34003': '这条投不了币（番剧 / 付费 / 特殊稿件）',
-  '34004': '投币数超过 2 —— 一条视频最多 2 个',
-  '34005': '今日投币上限（已经投满了）—— 明天再说',
   '65004': '取消赞失败 —— 本来就没点过赞',
   '22003': '这个用户不存在',
   '22004': '不能关注自己 —— 这是你和主人共用的号',
@@ -311,7 +307,7 @@ export async function apiText(u: string, opts: ApiGetOptions = {}): Promise<stri
   return (await guardedFetch(u, opts)).text()
 }
 
-/** 写操作 POST（点赞 / 投币 / 关注 / 评论）：节流与熔断跟 apiGet 同一套；
+/** 写操作 POST（点赞 / 关注 / 评论）：节流与熔断跟 apiGet 同一套；
  *  csrf 由调用方显式放进 body —— 这里不偷偷加，免得写错账号的事故被藏起来 */
 export async function apiPost<T = unknown>(u: string, body: Record<string, string | number>, { cred, referer = 'https://www.bilibili.com/' }: ApiGetOptions = {}): Promise<ApiEnvelope<T>> {
   throwIfBanned()

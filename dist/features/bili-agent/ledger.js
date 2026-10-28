@@ -17,7 +17,7 @@ export function ledgerAppend(entry) {
 export function writesToday() {
     return readLedger().log.filter((x) => x.type === 'comment' && new Date(x.at).toLocaleDateString('sv-SE') === today());
 }
-/** 今天做过的互动（赞 / 币 / 关注）—— 取消类不算额度 */
+/** 今天做过的互动（赞 / 关注）—— 取消类不算额度 */
 export function interactionsToday() {
     return readLedger().log.filter((x) => x.type === 'interact' && !x.undo
         && new Date(x.at).toLocaleDateString('sv-SE') === today());
