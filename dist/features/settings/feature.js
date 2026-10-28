@@ -2,7 +2,7 @@
  * dsh-bili-lite · settings —— 设置壳（宿主半边）—— 本 feature 的公共入口
  *
  * 职责只有四件：
- *   1. 设置 API：GET/POST /dsh-bili-lite/api/settings → 读写 ~/.dsh/bili-lite.config.json
+ *   1. 设置 API：GET/POST /dsh-bili-lite/api/settings → 读写 ~/.dsh/bili-lite-work/bili-lite.config.json
  *      （默认值与键清单来自 config/store —— 不搞两套 ✗）
  *   2. 凭据写入：POST /dsh-bili-lite/api/cookie → 先真的去 nav 验证一次（lib 的 whoami），
  *      验证通过才落盘（lib 的 saveCred，0600），且永不回显

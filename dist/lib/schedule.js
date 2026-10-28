@@ -6,7 +6,7 @@
 // 宿主不排、不改、不掷骰子 —— 计划文件和旧的「替它掷骰子排时刻表」是两回事：
 // 那个被否掉是因为决定在宿主手里，这里决定在模型手里 ✓
 //
-// 文件：~/.bili-lite/schedule.json ——
+// 文件：~/.dsh/bili-lite-work/schedule.json ——
 //   { seq, entries: [entry], fired: [最近投递记录（展示用，最多 50 条）] }
 //   entry: { id, kind: 'once'|'daily'|'every', label, createdAt, nextDue(ISO),
 //            at: "HH:MM"（daily 才有）, everyMin（every 才有）, plan（人话时间，展示用） }

@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from '../lib/http.ts'
 import { probeModel } from '../lib/model-ready.ts'
 import { CFG_FILE } from '../config/paths.ts'
+import { migrateLegacy } from '../config/migrate.ts'
 import { startPulse } from '../features/bili-pulse/feature.ts'
 import type { PulseApi } from '../features/bili-pulse/feature.ts'
 import { registerSettings } from '../features/settings/feature.ts'
@@ -28,6 +29,9 @@ export default {
   name: 'dsh-bili-lite',
   inject: ['sessionController', 'webServer', 'connection'],
   apply(ctx: PluginContext): void {
+    // 旧路径 → 会话工作区（一次性；宿主未受沙箱限制，能直接 rename）
+    try { migrateLegacy() } catch (e) { try { console.warn('[bili-lite] 旧数据迁移失败：' + (e instanceof Error ? e.message : e)) } catch {} }
+
     // ── 信任栅栏：回环直通；其余交给 DSH 的 connection 判定（fail-closed）────
     function isLoopbackReq(req: IncomingMessage): boolean {
       const host = String(req.headers?.host ?? '').toLowerCase()

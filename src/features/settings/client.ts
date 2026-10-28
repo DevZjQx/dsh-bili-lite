@@ -1,7 +1,7 @@
 /**
  * dsh-bili-lite —— 客户端半边：DSH「设置」里的 B 站分身 section（极简版）
  *
- * 数据流：section ⇄ /dsh-bili-lite/api/*（同源 fetch ✓）⇄ ~/.dsh/bili-lite.config.json
+ * 数据流：section ⇄ /dsh-bili-lite/api/*（同源 fetch ✓）⇄ ~/.dsh/bili-lite-work/bili-lite.config.json
  * 与宿主读**同一份配置**（config/store 是唯一真相）✓ 不存在两套配置。
  * ⚠️ 输入框是先改在本地、点「保存」才落盘 —— 不点保存 = 什么都没发生 ✗
  *
@@ -78,7 +78,7 @@ loader.load({
 
     // ── 字段清单（唯一真相：加字段只改这里 + 宿主白名单 ✓）─────────────────
     const FIELDS: Field[] = [
-      { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）和日记抬头；留空就不点名。人设正文仍写 ~/.bili-lite/persona.md", kind: "text" },
+      { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）和日记抬头；留空就不点名。人设正文仍写 ~/.dsh/bili-lite-work/persona.md", kind: "text" },
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
       { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "默认 3；>3 看起来会像刷量 ✗", kind: "text" },
       { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 投币 / 关注合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
@@ -245,7 +245,7 @@ loader.load({
         okMsg ? h("div", { className: "bll-ok" }, okMsg) : null,
         err ? h("div", { className: "bll-err" }, err) : null,
         out ? h("div", { className: "bll-out" }, out) : null,
-        h("div", { className: "bll-hint" }, "装完先点「启动自检」；人设可选：写一段放到 ~/.bili-lite/persona.md（取前 3000 字附在每次心跳前）"));
+        h("div", { className: "bll-hint" }, "装完先点「启动自检」；人设可选：写一段放到 ~/.dsh/bili-lite-work/persona.md（取前 3000 字附在每次心跳前）"));
     }
 
     const inject = ["slots"];

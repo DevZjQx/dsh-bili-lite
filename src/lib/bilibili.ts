@@ -4,7 +4,7 @@
  *   · 两次请求至少隔 risk.minGapMs（默认 1200ms）；连击是最容易被判机器人的特征
  *   · 撞 412 / 风控码 → 指数退避熔断（5/10/20/30 分钟），状态在 api-ban.json
  *   · 只读接口可带 ttlMs 缓存（api-cache.json，按凭据区分）
- *   · 凭据只从 ~/.bili-lite/credentials.json 读，永远不回显
+ *   · 凭据只从 ~/.dsh/bili-lite-work/credentials.json 读，永远不回显
  *   · apiGet 吃 JSON；弹幕 list.so 这类 XML 文本接口走 apiText，同一套保护
  */
 import fs from 'node:fs'

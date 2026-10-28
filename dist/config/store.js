@@ -1,6 +1,6 @@
 /**
  * 配置存取 —— 默认值是唯一真相：宿主、CLI、心跳都从这里 import，不另抄一份。
- * 读写同一份 ~/.dsh/bili-lite.config.json；没有配置文件就用默认值。
+ * 读写同一份 ~/.dsh/bili-lite-work/bili-lite.config.json；没有配置文件就用默认值。
  * 键清单（CONFIG_KEYS）= 设置页 POST 的顶层白名单：加字段只改 DEFAULTS。
  */
 import fs from 'node:fs';

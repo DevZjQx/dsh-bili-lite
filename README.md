@@ -18,7 +18,7 @@
 - **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `bun bili.ts schedule add --daily 21:00 --label "晚刷"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
 - **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜，不给就热门里挑，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
 - **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
-- **写日记**：`~/.dsh/bili-lite-diary.md`，一天几段
+- **写日记**：`~/.dsh/bili-lite-work/diary.md`，一天几段
 - **互动**：真喜欢就点赞 / 投 1–2 个币 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；先 `--dry` 看一眼再 `--go`）
 - **克制**：撞到风控（412 / 验证码 / 限流）**立刻熔断停手**
@@ -30,7 +30,7 @@
 - ❌ 同一视频 7 天内评第二次 / 同一种互动做第二次（取消赞、取关是在纠正，不占额度也不判重；取消后可以再做，判重看最后一条记录）
 - ❌ 用 @ 招呼陌生人（评论正文里带 @ 直接拒绝 ✓ 共用账号更不该拉山头）
 - ❌ 不带 `--dry` / `--go` 的写命令（拒绝裸跑）
-- ❌ 凭据回显（cookie 只写 `~/.bili-lite/credentials.json`，权限 0600）
+- ❌ 凭据回显（cookie 只写 `~/.dsh/bili-lite-work/credentials.json`，权限 0600）
 - ❌ 撞 412/风控码硬闯（自动熔断 5/10/20/30 分钟退避）
 - ❌ 计划无限堆（在排最多 30 条；`--every` 最短 5 分钟）
 
@@ -73,7 +73,21 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 - 它的评论、点赞、投币、关注都记在**你的号**上，说错话是你在承担：把「每天最多写几条 / 互动几次」设小一点
   （评论默认 3、互动默认 10；想更稳就调小；设 0 = 只看、只写日记、不发言）
 - 它不会用 @ 去招呼陌生人（工具里写死：评论正文带 @ 直接拒绝）✓
-- 它每天写在哪：`~/.dsh/bili-lite-diary.md` —— 那是它干了什么的入口，也是它的心里话
+- 它每天写在哪：`~/.dsh/bili-lite-work/diary.md` —— 那是它干了什么的入口，也是它的心里话
+
+## 权限（不用开完全访问）
+
+它的所有落盘（cookie / 账本 / 计划 / 缓存 / 日记 / 人设 / shots）都在它自己的会话工作目录
+`~/.dsh/bili-lite-work/` —— 也就是会话 cwd，正好是 `workspace-write` 的可写根。
+所以权限保持「工作区读写」即可：既不需要 `danger-full-access`，也不需要额外配置
+`additionalWritableRoots`。
+
+从旧版升级：首次启动会把 `~/.bili-lite/`、`~/.dsh/bili-lite.config.json`、
+`~/.dsh/bili-lite-diary.md` 一次性搬进 `~/.dsh/bili-lite-work/`（只搬一次，不保留旧路径双读）。
+沙箱里删不掉旧文件时会留着，忽略即可。
+
+> ⚠️ cookie 现在也在这个工作区里（`credentials.json`，0600）—— 它是它的私有目录，
+> 别提交到 git、别打包分享。
 
 ## 启动测试（装完立刻跑）
 
@@ -86,7 +100,7 @@ bun <插件目录>/src/features/bili-agent/bili.ts selftest
 | 症状 | 真正原因 |
 |---|---|
 | 「装完了，但找不到它」 | 它的会话在**工作区 → 未分组**里，不点开看不见 ✗ |
-| 「找到了，但什么都不干」 | 新会话默认没有完全权限 ✗ 给它 `danger-full-access` ✓ |
+| 「找到了，但什么都不干」 | 权限被设成「只读」✗ 切成「工作区读写 / workspace-write」即可 ✓（不用完全访问） |
 | 「cookie 填了还是未登录」 | 用了 `document.cookie` ✗ 必须 F12 手动复制 ✓（或者干脆 `bun bili.ts login` 扫码 ✓） |
 | 「心跳一直 0 拍」 | DSH 没有可用的模型 / API 凭证 —— 先在 Models 页配好 key；插件不会投注定失败的拍 ✓ |
 
@@ -121,17 +135,17 @@ bun src/features/bili-agent/bili.ts shots <BV>                     # 3×3 等间
 bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / 换一 P
 ```
 
-输出落在 `~/.bili-lite/shots/<BV>-<时间>-3x3.jpg`，把路径交给看图工具读一眼即可。
+输出落在 `~/.dsh/bili-lite-work/shots/<BV>-<时间>-3x3.jpg`，把路径交给看图工具读一眼即可。
 
 - **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，
-  或用环境变量 `FFMPEG=/绝对路径/ffmpeg` 指，或把它放到 `~/.bili-lite/bin/ffmpeg`；`selftest` 会显示装没装。
+  或用环境变量 `FFMPEG=/绝对路径/ffmpeg` 指，或把它放到 `~/.dsh/bili-lite-work/bin/ffmpeg`；`selftest` 会显示装没装。
 - **不装也不影响别的**：只有 `shots` 报错，`video` / `feed` / `comment` 照常。
 - **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
 - **画质跟登录态走**：匿名只有 360P，登录后一般 720P（多段老视频只抽第一段，会提示）。
 
 ## 人设（可选）
 
-插件不内置任何人格，也不内置名字。想让它是谁，写一段放到 `~/.bili-lite/persona.md`：
+插件不内置任何人格，也不内置名字。想让它是谁，写一段放到 `~/.dsh/bili-lite-work/persona.md`：
 每次心跳时取**前 3000 字**附在最前面（清空文件 = 撤销）。它叫什么写在配置里（`persona.name`，
 设置页「人设」一栏）—— 只用于心跳抬头（`【<名字>心跳】`）和日记抬头，留空就不点名。
 
@@ -140,16 +154,17 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 
 ## 文件都在哪
 
+全部在它的会话工作目录 `~/.dsh/bili-lite-work/` 里（= 会话 cwd = `workspace-write` 的可写根）：
+
 | 文件 | 作用 |
 |---|---|
-| `~/.dsh/bili-lite.config.json` | 配置（**不含凭据**），设置页和工具链共用同一份 |
-| `~/.bili-lite/credentials.json` | cookie（0600，永不回显） |
-| `~/.bili-lite/ledger.json` | 写额度 / 判重账本（comment / interact / watch 都记） |
-| `~/.bili-lite/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
-| `~/.bili-lite/persona.md` | 人设（可选） |
-| `~/.bili-lite/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
-| `~/.dsh/bili-lite-diary.md` | 日记 |
-| `~/.dsh/bili-lite-work/` | 它的专用会话工作目录 |
+| `~/.dsh/bili-lite-work/bili-lite.config.json` | 配置（**不含凭据**），设置页和工具链共用同一份 |
+| `~/.dsh/bili-lite-work/credentials.json` | cookie（0600，永不回显） |
+| `~/.dsh/bili-lite-work/ledger.json` | 写额度 / 判重账本（comment / interact / watch 都记） |
+| `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
+| `~/.dsh/bili-lite-work/persona.md` | 人设（可选） |
+| `~/.dsh/bili-lite-work/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
+| `~/.dsh/bili-lite-work/diary.md` | 日记 |
 
 ## 开发（Bun + TypeScript）
 
@@ -205,7 +220,9 @@ src/
 
 ```bash
 dsh plugin --profile desktop remove dsh-bili-lite
-rm -rf ~/.bili-lite ~/.dsh/bili-lite-work ~/.dsh/bili-lite-diary.md ~/.dsh/bili-lite.config.json
+rm -rf ~/.dsh/bili-lite-work
+# 旧版本残留（迁移后一般已空）：
+# rm -rf ~/.bili-lite ~/.dsh/bili-lite-diary.md ~/.dsh/bili-lite.config.json
 ```
 
 ## License

@@ -1,6 +1,6 @@
 # bili-pulse（心跳）
 
-**Purpose.** 让它「在场」，且节奏攥在它自己手里：宿主常驻，每分钟看两眼 —— 它自己排的计划（`~/.bili-lite/schedule.json`，agent 用 `bili.ts schedule` 写）到点没：到点就投「计划拍」，拍里带上它自己写的标签，错过的补投；它什么都没排时，按 `pulse.everyMin`（默认 60）分钟投一拍中性的「现在想干嘛」当兜底。**计划非空时兜底节拍暂停**（它的计划替代默认节奏），`schedule clear` 后恢复。sessionId 固定为 `bili-lite`，跨天保留上下文。
+**Purpose.** 让它「在场」，且节奏攥在它自己手里：宿主常驻，每分钟看两眼 —— 它自己排的计划（`~/.dsh/bili-lite-work/schedule.json`，agent 用 `bili.ts schedule` 写）到点没：到点就投「计划拍」，拍里带上它自己写的标签，错过的补投；它什么都没排时，按 `pulse.everyMin`（默认 60）分钟投一拍中性的「现在想干嘛」当兜底。**计划非空时兜底节拍暂停**（它的计划替代默认节奏），`schedule clear` 后恢复。sessionId 固定为 `bili-lite`，跨天保留上下文。
 
 **Owns.** 每分钟 tick（计划拍优先 → 兜底节拍）；投递前的可用性闸门（没有 API 凭证 / 没有可用模型 → 不投，软等待、不算失败、不记账，恢复后下一拍自动继续）；两种拍文案（人设前缀 + 现在几点 + 工具用法与克制的提醒；计划拍带它自己写的标签；抬头里的名字取 `persona.name`，可空 —— 插件不写死名字）；投递后的计划记账（`markFired`：投递失败不记账 → 下一拍重投）；会话服务未就绪时的软等待（DSH 刚启动 / 刚装插件：不算投递失败、只提醒一次、下一拍再试）；连续失败只记头一次与每半小时一次、`lastError` 上报；`GET /dsh-bili-lite/api/status`（含 `plan` 概要、`gated` 与 `lastError`，设置页 / 排查用）。
 

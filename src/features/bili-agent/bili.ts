@@ -26,7 +26,7 @@
 //   · 每天评论 ≤ quota.writeDaily（默认 3）、互动 ≤ quota.interactDaily（默认 10）；
 //     同一视频 7 天内同一种评论/互动只做一次（取消赞 / 取关不占额度）
 //   · 两次请求至少隔 risk.minGapMs（默认 1200ms）；撞 412/风控码 → 熔断退避（lib/bilibili.ts）
-//   · 凭据只从 ~/.bili-lite/credentials.json 读，永远不回显
+//   · 凭据只从 ~/.dsh/bili-lite-work/credentials.json 读，永远不回显
 //
 // 【结构例外（SKILL §10）】入口文件按 CLI 的框架约定叫 bili.ts 而非 feature.ts：
 // 它是本 feature 唯一入口 —— 命令实现在 commands.ts、账本在 ledger.ts、
@@ -34,6 +34,7 @@
 // 从不 import 它的代码。跑法：bun 直接吃 TypeScript，不需要先编译 ✓
 // ============================================================================
 import { pathToFileURL } from 'node:url'
+import { migrateLegacy } from '../../config/migrate.ts'
 import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInteract, cmdDiary, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
 
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
@@ -54,6 +55,7 @@ const invokedDirectly = !!process.argv[1] && import.meta.url === pathToFileURL(p
 if (invokedDirectly) {
   const { flags, positional } = parseArgs(rest)
   try {
+    migrateLegacy()
     if (cmd === 'selftest') await cmdSelftest(flags.has('json'))
     else if (cmd === 'login') await cmdLogin()
     else if (cmd === 'whoami') await cmdWhoami()

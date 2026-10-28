@@ -1,7 +1,7 @@
 /**
  * ffmpeg —— 抽帧的唯一外部依赖（可选：只有 shots 用得到，其余功能不需要它）。
  *
- * 为什么单独一个文件：查找顺序要写死一处（$FFMPEG → PATH → 仓库 bin/ → ~/.bili-lite/bin/），
+ * 为什么单独一个文件：查找顺序要写死一处（$FFMPEG → PATH → 仓库 bin/ → ~/.dsh/bili-lite-work/bin/），
  * 找不到时给人话（装什么、怎么指路径），而不是让 agent 看到 ENOENT。
  * 不引 npm 包、不下载二进制 —— lite 只借用户机器上已有的那份。
  */
@@ -32,7 +32,7 @@ function onPath() {
     }
     return null;
 }
-/** ffmpeg 在哪（找不到 = null）。顺序：$FFMPEG → PATH → 仓库 bin/ → ~/.bili-lite/bin/ */
+/** ffmpeg 在哪（找不到 = null）。顺序：$FFMPEG → PATH → 仓库 bin/ → ~/.dsh/bili-lite-work/bin/ */
 export function ffmpegPath() {
     return [process.env.FFMPEG, onPath(), path.join(ROOT, 'bin', EXE), path.join(DATA_DIR, 'bin', EXE)]
         .find(isFile) ?? null;

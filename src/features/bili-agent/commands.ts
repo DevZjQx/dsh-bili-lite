@@ -131,7 +131,7 @@ export async function cmdSelftest(asJson: boolean): Promise<void> {
     fs.mkdirSync(DATA_DIR, { recursive: true })
     const probe = path.join(DATA_DIR, '.write-probe')
     fs.writeFileSync(probe, 'ok'); fs.rmSync(probe)
-    add('数据目录', true, `${DATA_DIR} 可写 ✓`)
+    add('数据目录', true, `${DATA_DIR} 可写 ✓（会话工作区内，workspace-write 即可）`)
   } catch (e) { add('数据目录', false, `${DATA_DIR} 写不进去：${errMsg(e)}`) }
   try {
     fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true })
@@ -155,7 +155,7 @@ export async function cmdSelftest(asJson: boolean): Promise<void> {
   console.log(`\n${ok ? '══ 全部通过 ✓ 可以用了 ══' : '══ 有 ✗，先照提示修 ══'}`)
   console.log('\n接下来要做的两件事（很多人卡在这）：')
   console.log('  ① 左侧「工作区」→ 展开「未分组」→ 找到 bili-lite 会话（不点开看不见 ✗）')
-  console.log('  ② 打开它 → 权限设置 → 选「完全访问 / danger-full-access」')
+  console.log('  ② 权限保持「工作区读写 / workspace-write」即可 —— 数据都在它的会话工作目录里，不用开完全访问 ✓')
   process.exit(ok ? 0 : 1)
 }
 
