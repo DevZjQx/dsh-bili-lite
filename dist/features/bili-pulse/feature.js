@@ -93,7 +93,28 @@ catch { } } }) {
         catch (e) {
             const main = e instanceof Error ? e.message : String(e);
             const extra = createErr ? `（create: ${createErr instanceof Error ? createErr.message : String(createErr)}）` : '';
-            throw new Error(main + extra);
+            // throwIfAborted 说明宿主在读某个我们没给的东西 —— 临时把它的接口形状带出来，一次就够
+            const hint = /throwIfAborted/.test(main) ? ' ｜ 宿主会话接口：' + shapeOf(c) : '';
+            throw new Error(main + extra + hint);
+        }
+    }
+    /** 临时诊断：宿主 prompt 的键与源码片段（定位它到底在读哪个 signal） */
+    function shapeOf(c) {
+        const src = (v) => {
+            try {
+                if (typeof v !== 'function')
+                    return typeof v;
+                return Function.prototype.toString.call(v).replace(/\s+/g, ' ').slice(0, 280);
+            }
+            catch {
+                return '?';
+            }
+        };
+        try {
+            return `keys=${Object.keys(c).join(',')} prompt=${src(c.prompt)}`;
+        }
+        catch {
+            return '?';
         }
     }
     async function tick() {
