@@ -1,0 +1,18 @@
+# ============================================================================
+# dsh-bili-lite —— DSH bundle patch
+# ============================================================================
+# 插件挂载声明：DSH 启动时把本插件插进 profile 的配置树。
+#
+# 安装（本地开发，link 到源码目录）：
+#   dsh plugin --profile desktop add "link:/path/to/dsh-bili-lite"
+# 或发布后：
+#   dsh plugin --profile desktop add dsh-bili-lite
+#
+# ⚠️ `name:` 必须与安装后的包名完全一致（这里是 dsh-bili-lite），
+#    否则表现为「装上了但设置页 404」。
+# 设置页在：DSH「设置 → B站小鲤」（src/features/settings/client.js 注册的 section）。
+# ============================================================================
+
+- insert:
+    - id: dsh-bili-lite
+      name: dsh-bili-lite
