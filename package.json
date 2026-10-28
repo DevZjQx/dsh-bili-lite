@@ -28,8 +28,7 @@
     "build": "tsc -p tsconfig.build.json && bun scripts/postbuild.ts",
     "typecheck": "tsc -p tsconfig.json",
     "check": "bun run typecheck && bun run build && bun scripts/check-structure.ts",
-    "cli": "bun src/features/bili-agent/bili.ts",
-    "prepack": "bun run build"
+    "cli": "bun src/features/bili-agent/bili.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

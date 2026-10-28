@@ -41,11 +41,13 @@
 抽帧九宫格另需 **ffmpeg**（可选，见下文；不装只是少画面那一路）。
 
 ```bash
-# 0) 装依赖 + 编译一次（dist 不进仓库）
-bun install && bun run build
+# 0) 装依赖（dist 随仓库提交，装的时候不编译；改过源码才需要 bun run build）
+bun install
 
-# 1) 装插件（本地目录 / npm 都行）
-dsh plugin --profile desktop add "link:/path/to/dsh-bili-lite"
+# 1) 装插件（GitHub / npm / 本地目录都行）
+dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
+# 本地目录：
+# dsh plugin --profile desktop add "link:/path/to/dsh-bili-lite"
 
 # 2) 重启一次 DSH（bundle 层要重启才组装）
 
@@ -151,7 +153,7 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 ## 开发（Bun + TypeScript）
 
 - 源码全是 `.ts`（`src/` 与 `scripts/`），仓库里**没有 JS 源文件**；跑和装都走 Bun（`bun.lock` 锁版本）。
-- 宿主半边要编译：`bun run build` → `dist/`（tsc 1:1 产出，`main` / `exports` 都指向 dist）。构建最后一步 `scripts/postbuild.ts`
+- 宿主半边要编译：`bun run build` → `dist/`（tsc 1:1 产出，`main` / `exports` 都指向 dist）。**dist 随仓库提交** —— 这样 `dsh plugin add github:…` 不会触发安装时构建（pnpm v11 默认禁止 git 依赖跑构建脚本，会报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`）；改完源码必须重新构建并把 dist 一起提交。构建最后一步 `scripts/postbuild.ts`
   会去掉浏览器半边 `client.js` 里 tsc 自动补的 `export {}`：那个文件由 DSH 的 `__ModuleLoader__` 当普通脚本加载，不是 ES 模块。
 - CLI 不必编译也能跑：`bun src/features/bili-agent/bili.ts selftest`（Bun 直接吃 TS）；插件 spawn 的是 dist 里的那份。
 - 常用：`bun run typecheck`（tsc --noEmit）· `bun run check`（类型 + 构建 + 结构）· `bun run cli`（等于跑 CLI）。

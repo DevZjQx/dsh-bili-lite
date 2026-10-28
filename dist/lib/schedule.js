@@ -1,0 +1,187 @@
+// ============================================================================
+// dsh-bili-lite · 计划（它自己排的作息 / 定时任务）—— 两侧共用的唯一真相
+//
+// 谁决定：永远它自己 —— agent 用 `bun bili.ts schedule add/drop/clear` 写这里，
+// 宿主（bili-pulse）只照着读：到点投「计划拍」、拍里带上它自己写的标签。
+// 宿主不排、不改、不掷骰子 —— 计划文件和旧的「替它掷骰子排时刻表」是两回事：
+// 那个被否掉是因为决定在宿主手里，这里决定在模型手里 ✓
+//
+// 文件：~/.bili-lite/schedule.json ——
+//   { seq, entries: [entry], fired: [最近投递记录（展示用，最多 50 条）] }
+//   entry: { id, kind: 'once'|'daily'|'every', label, createdAt, nextDue(ISO),
+//            at: "HH:MM"（daily 才有）, everyMin（every 才有）, plan（人话时间，展示用） }
+//
+// 防滥用上限（写死，与写额度同 philosophy）：在排 ≤30 条；--every 最短 5 分钟。
+// ============================================================================
+import { SCHEDULE_FILE } from '../config/paths.js';
+import { readJson, writeJson } from './json-file.js';
+export const MAX_PENDING = 30;
+export const MIN_EVERY_MIN = 5;
+export const MAX_EVERY_MIN = 1440;
+const pad = (n) => String(n).padStart(2, '0');
+/** 仓库统一的时间展示：sv-SE → "YYYY-MM-DD HH:mm" */
+const fmtDate = (d) => d.toLocaleDateString('sv-SE') + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+export function readPlan() {
+    const p = readJson(SCHEDULE_FILE, {});
+    return {
+        seq: Number(p.seq) || 0,
+        entries: Array.isArray(p.entries) ? p.entries : [],
+        fired: Array.isArray(p.fired) ? p.fired : [],
+    };
+}
+function writePlan(p) { writeJson(SCHEDULE_FILE, p); }
+/** "HH:MM" → {h,m}；不合规矩给 null（让调用方报用法，不静默猜） */
+export function parseHHMM(s) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(s ?? '').trim());
+    if (!m)
+        return null;
+    const h = Number(m[1]), mi = Number(m[2]);
+    return h <= 23 && mi <= 59 ? { h, m: mi } : null;
+}
+/** 下一个「今天（或明天）的 h:m」—— 已过就排到明天（本地时区） */
+export function nextDailyAt(h, m, from = new Date()) {
+    const d = new Date(from);
+    d.setHours(h, m, 0, 0);
+    if (d.getTime() <= from.getTime())
+        d.setDate(d.getDate() + 1);
+    return d;
+}
+/** --at："21:30"（今天，过了就明天）或 "2026-02-06 21:30" / "2026-02-06T21:30"（本地时区）→ Date；不对就 throw */
+export function parseAt(s, now = new Date()) {
+    const str = String(s ?? '').trim();
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2})[T ](\d{1,2}):(\d{2})$/.exec(str);
+    if (m) {
+        const [, y, mo, d, h, mi] = m.map(Number);
+        const t = new Date(y, mo - 1, d, h, mi, 0, 0);
+        if (t.getFullYear() !== y || t.getMonth() !== mo - 1 || t.getDate() !== d)
+            throw new Error(`没有这个日子：${str}（示例：2026-02-06 21:30）`);
+        return t;
+    }
+    const hm = parseHHMM(str);
+    if (hm)
+        return nextDailyAt(hm.h, hm.m, now);
+    throw new Error(`看不懂 --at "${str}" —— 要 "21:30" 或 "2026-02-06 21:30"`);
+}
+/** --every："90" | "90m" | "2h" | "1d" → 分钟数（5–1440）；不对就 throw */
+export function parseEvery(s) {
+    const m = /^(\d+(?:\.\d+)?)\s*([mhd]?)$/i.exec(String(s ?? '').trim());
+    if (!m)
+        throw new Error(`看不懂 --every "${s}" —— 示例：90m、2h、45`);
+    const n = Number(m[1]);
+    const unit = m[2].toLowerCase();
+    const min = Math.round(unit === 'h' ? n * 60 : unit === 'd' ? n * 1440 : n);
+    if (!Number.isFinite(min) || min < MIN_EVERY_MIN || min > MAX_EVERY_MIN) {
+        throw new Error(`--every 要在 ${MIN_EVERY_MIN} 分钟 – ${MAX_EVERY_MIN} 分钟（1 天）之间，现在是 ${min}`);
+    }
+    return min;
+}
+/** 人话时间（展示用）：once → "2026-02-06 21:30"，daily → "每天 21:30"，every → "每 90 分钟" */
+export function fmtWhen(e) {
+    if (e.kind === 'daily')
+        return `每天 ${e.at}`;
+    if (e.kind === 'every')
+        return `每 ${e.everyMin} 分钟`;
+    return e.plan || (e.nextDue ? fmtDate(new Date(e.nextDue)) : '?');
+}
+const defaultLabel = { once: '到点了，看一眼？', daily: '按计划的日常一拍', every: '按计划的一拍' };
+const cleanLabel = (s, kind) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 80) || defaultLabel[kind];
+/**
+ * 加一条（三种拍子给一个）：{ at?, daily?, every?, label? }
+ * 返回 { entry, note }；排满了 / 参数不对 throw（CLI 把话带给模型）。
+ */
+export function addEntry({ at, daily, every, label } = {}) {
+    const given = [at !== undefined, daily !== undefined, every !== undefined].filter(Boolean).length;
+    if (given !== 1)
+        throw new Error('--at / --daily / --every 三选一，正好给一个');
+    const p = readPlan();
+    if (p.entries.length >= MAX_PENDING)
+        throw new Error(`计划排满了（最多 ${MAX_PENDING} 条在排）—— 先 schedule drop 几条，或 clear 重排`);
+    let draft;
+    if (at !== undefined) {
+        const bare = parseHHMM(at); // 只给了 HH:MM：今天这个点已过会排到明天，说一声
+        const rolled = bare && new Date().setHours(bare.h, bare.m, 0, 0) <= Date.now();
+        const t = parseAt(at);
+        draft = { kind: 'once', nextDue: t.toISOString(), plan: fmtDate(t), note: rolled ? '今天这个点已过 → 排到明天' : null };
+    }
+    else if (daily !== undefined) {
+        const hm = parseHHMM(daily);
+        if (!hm)
+            throw new Error(`看不懂 --daily "${daily}" —— 要 "HH:MM"，示例：21:00`);
+        const t = nextDailyAt(hm.h, hm.m);
+        draft = { kind: 'daily', at: `${pad(hm.h)}:${pad(hm.m)}`, nextDue: t.toISOString() };
+    }
+    else {
+        const min = parseEvery(every);
+        draft = { kind: 'every', everyMin: min, nextDue: new Date(Date.now() + min * 60_000).toISOString() };
+    }
+    const entry = {
+        ...draft,
+        id: 's' + (p.seq + 1),
+        label: cleanLabel(label, draft.kind),
+        createdAt: new Date().toISOString(),
+    };
+    p.seq += 1;
+    p.entries.push(entry);
+    writePlan(p);
+    return { entry, note: entry.note ?? null };
+}
+export function dropEntry(id) {
+    const p = readPlan();
+    const before = p.entries.length;
+    p.entries = p.entries.filter((e) => e.id !== String(id ?? '').trim());
+    writePlan(p);
+    return p.entries.length < before;
+}
+export function clearPlan() {
+    const p = readPlan();
+    const n = p.entries.length;
+    p.entries = [];
+    writePlan(p);
+    return n;
+}
+/** 到点的（含错过补投：宿主刚起来也照发）；按 nextDue 排序，只读不写 */
+export function dueEntries(now = Date.now()) {
+    return readPlan().entries
+        .filter((e) => Number.isFinite(Date.parse(e.nextDue)) && Date.parse(e.nextDue) <= now)
+        .sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue));
+}
+/** 投完记账：once 删掉；daily/every 推到下一次；追一笔 fired（最多留 50 条） */
+export function markFired(ids, now = new Date()) {
+    const p = readPlan();
+    const hit = new Set(ids);
+    const done = [];
+    p.entries = p.entries.filter((e) => {
+        if (!hit.has(e.id))
+            return true;
+        done.push(e);
+        const hm = parseHHMM(e.at);
+        if (e.kind === 'daily' && hm) {
+            e.nextDue = nextDailyAt(hm.h, hm.m, now).toISOString();
+            return true;
+        }
+        if (e.kind === 'every' && Number.isFinite(Number(e.everyMin))) {
+            let next = Date.parse(e.nextDue) + Number(e.everyMin) * 60_000;
+            if (next <= now.getTime())
+                next = now.getTime() + Number(e.everyMin) * 60_000; // 迟到的投递不连环补
+            e.nextDue = new Date(next).toISOString();
+            return true;
+        }
+        return false; // once（以及认不出的坏数据）→ 发完即撤
+    });
+    for (const e of done)
+        p.fired.push({ at: now.toISOString(), id: e.id, kind: e.kind, label: e.label });
+    if (p.fired.length > 50)
+        p.fired = p.fired.slice(-50);
+    writePlan(p);
+    return done;
+}
+/** 设置页 / 状态用：在排几条、下一次什么时候 */
+export function planSummary(now = new Date()) {
+    const p = readPlan();
+    const next = p.entries.filter((e) => Number.isFinite(Date.parse(e.nextDue))).sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue))[0];
+    return {
+        pending: p.entries.length,
+        nextDueText: next ? fmtDate(new Date(next.nextDue)) : null,
+        nextWhenText: next ? fmtWhen(next) : null,
+    };
+}
