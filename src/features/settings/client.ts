@@ -130,7 +130,7 @@ loader.load({
           const d = await r.json() as SettingsResp;
           if (!d.ok) throw new Error(d.error || "保存失败");
           setCfg(d.config); setSaved(JSON.stringify(d.config));
-          setOkMsg("✓ 已保存（心跳下一拍就按新节拍算）" + (d.warn ? "\\n⚠️ " + d.warn : ""));
+          setOkMsg("✓ 已保存（心跳下一拍就按新节拍算）" + (d.warn ? "\n⚠️ " + d.warn : ""));
           load();
         } catch (e) { setErr(String((e as Error).message || e)); }
         finally { setBusy("") }
@@ -177,7 +177,7 @@ loader.load({
         try {
           const r = await fetch(`${API}/selftest`);
           const d = await r.json() as SelftestResp;
-          setOut(d.items ? d.items.map((it) => `${it.ok ? "✓" : "✗"} ${it.name}：${it.detail}`).join("\\n") + (d.ok ? "\\n\\n══ 全部通过 ✓" : "\\n\\n══ 有 ✗，先照提示修") : "");
+          setOut(d.items ? d.items.map((it) => `${it.ok ? "✓" : "✗"} ${it.name}：${it.detail}`).join("\n") + (d.ok ? "\n\n══ 全部通过 ✓" : "\n\n══ 有 ✗，先照提示修") : "");
           if (!d.ok && d.error) setErr(d.error);
           load();
         } catch (e) { setErr(String((e as Error).message || e)); }
