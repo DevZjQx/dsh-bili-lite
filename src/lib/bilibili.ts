@@ -110,7 +110,8 @@ export async function qrGenerate(): Promise<QrGenerate> {
 interface QrPollData { code?: number; message?: string; url?: string }
 
 /** 从 Set-Cookie 里挑凭据：扫码成功时 B 站用 Set-Cookie 下发 SESSDATA / bili_jct / DedeUserID，
- *  且 buvid3 / buvid4 只在这里出现；data.url 现在是一张 ticket 链接，query 里已经不带凭据了 */
+ *  buvid3 一般也在这里（buvid4 通常没有，靠 fingerSpi 补）；data.url 现在是一张 ticket 链接，
+ *  query 里已经不带凭据了 */
 function credFromSetCookie(res: Response): { sessdata?: string; bili_jct?: string; buvid3?: string; buvid4?: string; mid?: string } {
   const raw = typeof res.headers.getSetCookie === 'function'
     ? res.headers.getSetCookie()
@@ -156,7 +157,23 @@ export async function qrPoll(qrcodeKey: string): Promise<QrPollResult> {
   if (!cred.sessdata || !cred.bili_jct) {
     throw new Error('扫码成功但 B 站没下发 cookie（Set-Cookie 里没有 SESSDATA / bili_jct）—— 重扫一次；还不行就用手动粘贴 cookie')
   }
+  // 扫码只给 buvid3；buvid4 单独问一次指纹接口补上。取不到不算失败 —— 两个都是可选的，
+  // 缺了只是写接口（点赞 / 投币 / 关注）更容易被判成「非法访问」
+  try {
+    const fp = await fingerSpi(cred)
+    cred.buvid3 ||= fp.buvid3
+    cred.buvid4 ||= fp.buvid4
+  } catch {}
   return { status: 'done', cred, mid: jar.mid || param('DedeUserID') }
+}
+
+/** 设备指纹（buvid3 / buvid4）：匿名就能问，返回 b_3 / b_4；扫码成功的 Set-Cookie 里通常只有 buvid3 */
+export async function fingerSpi(cred?: Cred | null): Promise<{ buvid3: string; buvid4: string }> {
+  const j = await apiGet<ApiEnvelope<{ b_3?: string; b_4?: string }>>(
+    'https://api.bilibili.com/x/frontend/finger/spi',
+    { cred, referer: 'https://www.bilibili.com/' },
+  )
+  return { buvid3: String(j.data?.b_3 ?? ''), buvid4: String(j.data?.b_4 ?? '') }
 }
 
 // ── 常见返回码 → 人话 ──────────────────────────────────────────────────────

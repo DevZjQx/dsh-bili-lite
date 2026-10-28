@@ -179,6 +179,7 @@ export async function cmdLogin(): Promise<void> {
         saveCred(st.cred)
         writeConfig({ ...config(), self })
         console.log(`\n✓ 登录成功：${self.name}（mid ${self.mid}）—— 凭据已写入 ${CRED_FILE}（0600，永不回显）`)
+        console.log(`  设备指纹：buvid3 ${st.cred.buvid3 ? '✓' : '✗'} · buvid4 ${st.cred.buvid4 ? '✓' : '✗'}${st.cred.buvid4 ? '' : '（缺了不影响登录；写操作若仍被判「非法访问」再去浏览器抄一次）'}`)
         console.log('⚠️ 这是与 AI 共用的账号：它发的每条评论都会以这个身份公开出现 —— 确认是主人授权的号')
         return
       }
