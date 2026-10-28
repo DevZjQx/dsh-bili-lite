@@ -14,6 +14,7 @@
  * 依赖由 app 注入：getSession（→ sessionController）、route、cliPath。
  */
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { json } from '../../lib/http.ts'
 import { config, DEFAULTS } from '../../config/store.ts'
 import type { Config } from '../../config/store.ts'
@@ -102,32 +103,21 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
   }
 
   async function deliver(c: SessionControllerLike, text: string): Promise<void> {
-    // 每次投递带一个不中止的 signal：宿主对 create / prompt 都会先 throwIfAborted，缺了就整拍失败
-    const signal = new AbortController().signal
-    let createErr: unknown = null
-    try { await c.create({ sessionId: SESSION_ID, cwd: WORK_DIR, signal }) } catch (e) {
-      createErr = e   // 多半是「会话已存在」，先记着；真投不出去时一并报出来，免得只剩一句没头没脑的 prompt 错误
-    }
+    // 会话可能已存在 → create 会复用并把真正落地的 id 还回来，投递要用这个 id
+    let sessionId = SESSION_ID
     try {
-      await c.prompt({ sessionId: SESSION_ID, mode: 'queue', content: [{ type: 'text', text }], signal })
+      const created = await c.create({ sessionId: SESSION_ID, cwd: WORK_DIR })
+      if (created && typeof created.sessionId === 'string' && created.sessionId) sessionId = created.sessionId
     } catch (e) {
-      const main = e instanceof Error ? e.message : String(e)
-      const extra = createErr ? `（create: ${createErr instanceof Error ? createErr.message : String(createErr)}）` : ''
-      // throwIfAborted 说明宿主在读某个我们没给的东西 —— 临时把它的接口形状带出来，一次就够
-      const hint = /throwIfAborted/.test(main) ? ' ｜ 宿主会话接口：' + shapeOf(c) : ''
-      throw new Error(main + extra + hint)
+      // 建不出来（宿主还没起完 / cwd 不可用）就不投 —— 拍会留到下一拍重投，不记账
+      throw new Error('create 会话失败：' + (e instanceof Error ? e.message : String(e)))
     }
-  }
-
-  /** 临时诊断：宿主 prompt 的键与源码片段（定位它到底在读哪个 signal） */
-  function shapeOf(c: SessionControllerLike): string {
-    const src = (v: unknown): string => {
-      try {
-        if (typeof v !== 'function') return typeof v
-        return Function.prototype.toString.call(v).replace(/\s+/g, ' ').slice(0, 280)
-      } catch { return '?' }
-    }
-    try { return `keys=${Object.keys(c).join(',')} prompt=${src(c.prompt)}` } catch { return '?' }
+    await c.prompt({
+      requestId: randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text }],
+    }, new AbortController().signal)
   }
 
   async function tick(): Promise<void> {

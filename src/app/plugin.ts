@@ -89,25 +89,6 @@ export default {
       route('/dsh-bili-lite/api/status', async (_req, res) => { json(res, 200, { ok: true, pulse: { ok: false } }) })
     }
 
-    // ── 临时诊断：投拍失败时用来认宿主的会话接口（定完就删）──
-    try {
-      const sc = sessionController() as unknown as Record<string, any> | undefined
-      const keysOf = (v: unknown): string => {
-        if (v === undefined) return 'none'
-        if (v === null) return 'null'
-        if (typeof v !== 'object' && typeof v !== 'function') return typeof v
-        try {
-          const own = Object.keys(v as object).slice(0, 30)
-          const proto: string[] = []
-          for (let p = Object.getPrototypeOf(v); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) proto.push(...Object.getOwnPropertyNames(p))
-          return `own=[${own.join(',')}] proto=[${proto.slice(0, 40).join(',')}]`
-        } catch (e) { return 'err:' + (e instanceof Error ? e.message : String(e)) }
-      }
-      const parts = ['ctx=' + keysOf(ctx), 'sc=' + keysOf(sc)]
-      if (sc) for (const k of ['agents', 'commands', 'history', 'controlState', 'listState', 'tRemote']) parts.push(`${k}=` + keysOf(sc[k]))
-      try { console.log('[bili-lite] 诊断 · 宿主会话接口：' + parts.join(' | ')) } catch {}
-    } catch {}
-
     // ── 设置壳：settings / cookie / qr / selftest 四条路由 ──
     registerSettings({ route, isTrusted: isTrustedReq, cliPath: CLI_PATH })
 

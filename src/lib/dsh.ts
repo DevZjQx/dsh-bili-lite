@@ -15,18 +15,26 @@ export type Route = (path: string, handler: RouteHandler) => void
 
 export interface WebServerLike { register(spec: RouteSpec): () => void }
 
+/** 一拍的面貌：宿主只认 text / image / file 三种 part */
+export interface PromptPartLike { type: 'text'; text: string }
+
+/**
+ * 投一拍 —— 形状照抄 DSH 的 SessionController（packages/api/session-controller/src/index.ts）：
+ *   prompt(request, signal) 两个位置参数，request 里必须有 requestId（客户端自己 mint 的 uuid）。
+ * signal 是第二个参数，不是 request 字段 —— 传错就是 throwIfAborted 读 undefined。
+ */
+export interface SessionPromptRequestLike {
+  requestId: string
+  sessionId: string
+  mode: 'queue' | 'steer'
+  content: PromptPartLike[]
+  clientTimeZone?: string
+}
+
 export interface SessionControllerLike {
-  /**
-   * signal：宿主每次调用都会先 signal.throwIfAborted() —— 缺了就是
-   * 「Cannot read properties of undefined (reading 'throwIfAborted')」。
-   */
-  create(opts: { sessionId: string; cwd?: string; signal?: AbortSignal }): Promise<unknown>
-  prompt(opts: {
-    sessionId: string
-    mode?: string
-    content: Array<{ type: 'text'; text: string }>
-    signal?: AbortSignal
-  }): Promise<unknown>
+  /** 返回真正落地的 sessionId（可能和请求的不一样，复用已有会话时） */
+  create(request: { sessionId?: string; cwd?: string }): Promise<{ sessionId?: string } | undefined>
+  prompt(request: SessionPromptRequestLike, signal: AbortSignal): Promise<unknown>
 }
 
 export interface ConnectionLike {
