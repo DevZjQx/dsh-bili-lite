@@ -7,7 +7,8 @@
  *   2. 凭据写入：POST /dsh-bili-lite/api/cookie → 先真的去 nav 验证一次（lib 的 whoami），
  *      验证通过才落盘（lib 的 saveCred，0600），且永不回显
  *   3. 扫码登录：POST /api/qr/start 出一张二维码（同一份 lib/qrcode 编码器出 SVG dataURL），
- *      POST /api/qr/poll 轮询状态；成功后验证并落盘。会话只存内存（重启丢失，重扫即可）
+ *      POST /api/qr/poll 轮询状态；凭据取自 poll 响应的 Set-Cookie，先验证、通过才落盘
+ *      （验证不过一个字节都不写，原登录态不变）。会话只存内存（重启丢失，重扫即可）
  *   4. 自检：GET /dsh-bili-lite/api/selftest → 真跑一次 `bun <bili.ts> selftest --json`
  *
  * 浏览器半边在本目录 client.ts（DSH 设置页的「B站养鱼」section），由包导出
@@ -109,12 +110,17 @@ export function registerSettings({ route, isTrusted, cliPath }: SettingsDeps): v
     try {
       const st = await qrPoll(s.qrcodeKey)
       if (st.status !== 'done') { json(res, 200, { ok: true, status: st.status }); return }
-      saveCred(st.cred)
-      const self = await whoami(st.cred)   // 落盘后真实验证一次
+      // 先验证、后落盘：验证不过就一个字节都不写，原登录态原样保留（qrcode_key 一次性，失败后让用户重扫）
+      const cred = parseCookie({ sessdata: st.cred.sessdata, bili_jct: st.cred.bili_jct, buvid3: st.cred.buvid3 })
+      const self = await whoami(cred)
+      saveCred(cred)
       writeConfig({ ...config(), self })
       qrSessions.delete(String(key))
       json(res, 200, { ok: true, status: 'done', detail: `已登录：${self.name}（mid ${self.mid}）` })
-    } catch (e) { json(res, 502, { ok: false, error: '扫码登录失败：' + String(e instanceof Error ? e.message : e).slice(0, 160) }) }
+    } catch (e) {
+      qrSessions.delete(String(key))
+      json(res, 200, { ok: false, status: 'error', error: '扫码登录失败：' + String(e instanceof Error ? e.message : e).slice(0, 200) + '（未保存，原登录态不变）' })
+    }
   })
 
   // ── 自检：真的跑一次 <runtime> <bili.js> selftest --json ──

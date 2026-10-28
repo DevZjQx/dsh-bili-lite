@@ -197,8 +197,8 @@ export async function cmdLogin() {
                 break;
             }
             if (st.status === 'done') {
+                const self = await whoami(st.cred); // 先真实验证，通过才落盘（不通过就不动旧凭据）
                 saveCred(st.cred);
-                const self = await whoami(st.cred); // 落盘后真实验证一次，确认登录态可用
                 writeConfig({ ...config(), self });
                 console.log(`\n✓ 登录成功：${self.name}（mid ${self.mid}）—— 凭据已写入 ${CRED_FILE}（0600，永不回显）`);
                 console.log('⚠️ 这是与 AI 共用的账号：它发的每条评论都会以这个身份公开出现 —— 确认是主人授权的号');

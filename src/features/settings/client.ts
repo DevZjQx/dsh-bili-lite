@@ -158,16 +158,16 @@ loader.load({
         finally { setBusy("") }
       }, []);
 
-      // 扫码轮询：2s 一次；done 后清会话并刷新登录态；过期/后台丢失就停下等用户重开
+      // 扫码轮询：2s 一次；成功 / 失败都停下来 —— 失败必须说出来，静默重试会让页面永远停在「已扫码」
       useEffect(() => {
         if (!qr || qr.status === "expired" || qr.status === "gone") return;
         const t = setInterval(async () => {
           try {
             const d = await fetch(`${API}/qr/poll`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key: qr.key }) }).then((x) => x.json() as Promise<QrPollResp>);
-            if (!d.ok) throw new Error(d.error || "查询失败");
-            if (d.status === "done") { setQr(null); setOkMsg("✓ " + d.detail); load(); }
-            else setQr((s) => (s && s.key === qr.key && s.status !== d.status ? { ...s, status: d.status } : s));
-          } catch { /* 单次轮询失败不打断，下个 2s 再看 */ }
+            if (!d.ok) { setQr(null); setErr(d.error || "扫码登录失败：未保存，原登录态不变"); return }
+            if (d.status === "done") { setQr(null); await load(); setOkMsg("✓ " + (d.detail || "已登录")); return }
+            setQr((s) => (s && s.key === qr.key && s.status !== d.status ? { ...s, status: d.status } : s));
+          } catch { /* 单次网络抖动不打断，下个 2s 再看（真正的失败服务端会回 ok:false） */ }
         }, 2000);
         return () => clearInterval(t);
       }, [qr, load]);

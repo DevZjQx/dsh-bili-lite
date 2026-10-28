@@ -175,8 +175,8 @@ export async function cmdLogin(): Promise<void> {
       if (st.status === 'scanned' && !saidScanned) { saidScanned = true; console.log('已扫码 —— 请在手机上点「确认登录」') }
       if (st.status === 'expired') { console.log('二维码过期了，换新的一张…'); break }
       if (st.status === 'done') {
+        const self = await whoami(st.cred)   // 先真实验证，通过才落盘（不通过就不动旧凭据）
         saveCred(st.cred)
-        const self = await whoami(st.cred)   // 落盘后真实验证一次，确认登录态可用
         writeConfig({ ...config(), self })
         console.log(`\n✓ 登录成功：${self.name}（mid ${self.mid}）—— 凭据已写入 ${CRED_FILE}（0600，永不回显）`)
         console.log('⚠️ 这是与 AI 共用的账号：它发的每条评论都会以这个身份公开出现 —— 确认是主人授权的号')

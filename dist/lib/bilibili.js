@@ -13,7 +13,7 @@ import { config } from '../config/store.js';
 import { DATA_DIR, CRED_FILE, BAN_FILE, CACHE_FILE } from '../config/paths.js';
 import { readJson, writeJson } from './json-file.js';
 export const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}; buvid3=${cred.buvid3}`;
+export const cookieHeader = (cred) => `SESSDATA=${cred.sessdata}; bili_jct=${cred.bili_jct}` + (cred.buvid3 ? `; buvid3=${cred.buvid3}` : ''); // 空 buvid3 不发（扫码拿不到时别发个空值）
 // ── 凭据（trim、查缺、不回显） ─────────────────────────────────────────────
 export function loadCred() {
     let j;
@@ -51,29 +51,63 @@ export async function qrGenerate() {
     }
     return { url: String(j.data.url), qrcodeKey: String(j.data.qrcode_key) };
 }
+/** 从 Set-Cookie 里挑凭据：扫码成功时 B 站用 Set-Cookie 下发 SESSDATA / bili_jct / DedeUserID，
+ *  且 buvid3 只在这里出现；data.url 现在是一张 ticket 链接，query 里已经不带凭据了 */
+function credFromSetCookie(res) {
+    const raw = typeof res.headers.getSetCookie === 'function'
+        ? res.headers.getSetCookie()
+        : String(res.headers.get('set-cookie') ?? '').split(/,(?=\s*[A-Za-z0-9_-]+=)/); // 老运行时：Expires 里也有逗号，只能按「逗号 + key=」切
+    const jar = {};
+    for (const line of raw) {
+        const pair = line.split(';', 1)[0];
+        const i = pair.indexOf('=');
+        if (i > 0)
+            jar[pair.slice(0, i).trim().toLowerCase()] = pair.slice(i + 1).trim();
+    }
+    return { sessdata: jar.sessdata, bili_jct: jar.bili_jct, buvid3: jar.buvid3, mid: jar.dedeuserid };
+}
 /** 轮询一次：waiting 未扫码 / scanned 已扫码待确认 / expired 已过期 / done 成功（带凭据）。
  *  现行响应：外层 code 恒 0（"OK"），真正的登录状态在 data.code（86101/86090/86038/0） */
 export async function qrPoll(qrcodeKey) {
-    const j = await apiGet(`https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`, { referer: 'https://passport.bilibili.com/' });
+    throwIfBanned();
+    // 不走 apiGet：成功凭据在响应头的 Set-Cookie 里，得拿到原始 Response；且不能自动跟随跳转
+    // （跨域票据链接一跳，302 之后的响应就没有 Set-Cookie 了）
+    const r = await guardedFetch(`https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${encodeURIComponent(qrcodeKey)}`, { referer: 'https://passport.bilibili.com/', redirect: 'error' });
+    let j;
+    try {
+        j = await r.json();
+    }
+    catch {
+        throw new Error(`非 JSON 响应（HTTP ${r.status}），可能是风控`);
+    }
+    guardCode(j);
     if (Number(j.code) !== 0)
         throw new Error(`扫码轮询失败：${explainCode(Number(j.code))}${j.message ? `（${j.message}）` : ''}`);
     const code = Number(j.data?.code);
     const status = { 86101: 'waiting', 86090: 'scanned', 86038: 'expired' }[code];
     if (status)
         return { status };
-    if (code !== 0 || !j.data?.url)
+    if (code !== 0)
         throw new Error(`扫码轮询失败：${explainCode(code)}${j.data?.message ? `（${j.data.message}）` : ''}`);
-    // 成功：凭据在 data.url 的 query 里（buvid3 可能没有，它可空）
-    const u = new URL(String(j.data.url));
-    return {
-        status: 'done',
-        cred: {
-            sessdata: u.searchParams.get('SESSDATA') ?? '',
-            bili_jct: u.searchParams.get('bili_jct') ?? '',
-            buvid3: u.searchParams.get('buvid3') ?? '',
-        },
-        mid: String(u.searchParams.get('DedeUserID') ?? ''),
+    // 成功：凭据优先取 Set-Cookie；只有在没有 set-cookie 的老形态下才退回 data.url 的 query
+    const jar = credFromSetCookie(r);
+    let u = null;
+    try {
+        u = j.data?.url ? new URL(String(j.data.url)) : null;
+    }
+    catch {
+        u = null;
+    }
+    const param = (k) => u?.searchParams.get(k) ?? '';
+    const cred = {
+        sessdata: jar.sessdata || param('SESSDATA'),
+        bili_jct: jar.bili_jct || param('bili_jct'),
+        buvid3: jar.buvid3 || param('buvid3'),
     };
+    if (!cred.sessdata || !cred.bili_jct) {
+        throw new Error('扫码成功但 B 站没下发 cookie（Set-Cookie 里没有 SESSDATA / bili_jct）—— 重扫一次；还不行就用手动粘贴 cookie');
+    }
+    return { status: 'done', cred, mid: jar.mid || param('DedeUserID') };
 }
 // ── 常见返回码 → 人话 ──────────────────────────────────────────────────────
 const CODE_HINTS = {
@@ -126,7 +160,7 @@ function throwIfBanned() {
     }
 }
 /** 发送段：节流 → 请求 → 412/429 熔断（apiGet / apiText / apiPost 共用，行为写死一处） */
-async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', method = 'GET', body } = {}) {
+async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', method = 'GET', body, redirect } = {}) {
     const gap = Math.max(300, Number(config().risk?.minGapMs ?? 1200));
     const idle = Date.now() - lastRequestAt;
     if (lastRequestAt && idle < gap)
@@ -137,7 +171,11 @@ async function guardedFetch(u, { cred, referer = 'https://www.bilibili.com/', me
         ...(cred ? { cookie: cookieHeader(cred) } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/x-www-form-urlencoded' }),
     };
-    const r = await fetch(u, { method, headers, ...(body === undefined ? {} : { body }), signal: AbortSignal.timeout(30000) });
+    const r = await fetch(u, {
+        method, headers, redirect,
+        ...(body === undefined ? {} : { body }),
+        signal: AbortSignal.timeout(30000),
+    });
     if (r.status === 412 || r.status === 429) {
         const mins = setBan(`HTTP ${r.status}`);
         throw new Error(`HTTP ${r.status}（B站风控）—— 已熔断 ${mins} 分钟，今天先歇了`);
