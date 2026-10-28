@@ -4,7 +4,7 @@
  *
  * 全部落在 WORK_DIR（它的会话工作目录）里：DSH 的 workspace-write 沙箱只允许写
  * 会话 cwd —— 数据跟着会话走，就不需要 additionalWritableRoots，更不需要
- * danger-full-access（旧路径的一次性迁移见 config/migrate.ts）。
+ * danger-full-access。
  */
 import path from 'node:path';
 import os from 'node:os';

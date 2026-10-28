@@ -35,7 +35,6 @@
 // 从不 import 它的代码。跑法：bun 直接吃 TypeScript，不需要先编译 ✓
 // ============================================================================
 import { pathToFileURL } from 'node:url'
-import { migrateLegacy } from '../../config/migrate.ts'
 import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdDiary, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
 
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
@@ -56,7 +55,6 @@ const invokedDirectly = !!process.argv[1] && import.meta.url === pathToFileURL(p
 if (invokedDirectly) {
   const { flags, positional } = parseArgs(rest)
   try {
-    migrateLegacy()
     if (cmd === 'selftest') await cmdSelftest(flags.has('json'))
     else if (cmd === 'login') await cmdLogin()
     else if (cmd === 'whoami') await cmdWhoami()

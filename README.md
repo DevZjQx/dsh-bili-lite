@@ -86,10 +86,6 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 所以权限保持「工作区读写」即可：既不需要 `danger-full-access`，也不需要额外配置
 `additionalWritableRoots`。
 
-从旧版升级：首次启动会把 `~/.bili-lite/`、`~/.dsh/bili-lite.config.json`、
-`~/.dsh/bili-lite-diary.md` 一次性搬进 `~/.dsh/bili-lite-work/`（只搬一次，不保留旧路径双读）。
-沙箱里删不掉旧文件时会留着，忽略即可。
-
 > ⚠️ cookie 现在也在这个工作区里（`credentials.json`，0600）—— 它是它的私有目录，
 > 别提交到 git、别打包分享。
 
@@ -229,8 +225,6 @@ src/
 ```bash
 dsh plugin --profile desktop remove dsh-bili-lite
 rm -rf ~/.dsh/bili-lite-work
-# 旧版本残留（迁移后一般已空）：
-# rm -rf ~/.bili-lite ~/.dsh/bili-lite-diary.md ~/.dsh/bili-lite.config.json
 ```
 
 ## License
