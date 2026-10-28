@@ -3,10 +3,12 @@
 // 只有 CLI 入口（bili.mjs）调用这里；账本在 ledger.js，B 站 HTTP 在 lib/bilibili.js。
 // ============================================================================
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { config, writeConfig, DEFAULTS } from '../../config/store.js'
-import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE } from '../../config/paths.js'
-import { apiGet, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief } from '../../lib/bilibili.js'
+import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js'
+import { apiGet, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, cookieHeader, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl } from '../../lib/bilibili.js'
+import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js'
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js'
 import { writesToday, commentedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js'
 import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN } from '../../lib/schedule.js'
@@ -49,6 +51,9 @@ export const HELP = `用法: node bili.mjs <命令> [参数…]
   video <BV> [--read 全文|mm:ss-mm:ss]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
+  shots <BV> [--grid 3x3] [--p 1] [--out 目录]
+                          抽帧九宫格：等间隔抽 N 帧拼一张图（默认 3×3），拿路径去看画面
+                          （需要 ffmpeg；没装就只这一条用不了，其余照常）
   comment <BV> --message "…" --dry|--go
                           发一条评论（唯一写操作；必须 --dry 或 --go）
   diary <text…> | show    写日记 / 看最近
@@ -96,6 +101,13 @@ export async function cmdSelftest(asJson) {
         add('字幕接口', true, `可达 ✓（样本${n ? `带 ${n} 条字幕` : '样本无字幕'}${info.need_login_subtitle && !login ? '；AI 字幕需登录' : ''}）`)
       } catch (e) { add('字幕接口', false, e.message) }
     } catch (e) { add('登录态', false, e.message) }
+  }
+  // 抽帧是可选能力：装了 ffmpeg 才有画面那一路，没装不算失败（其余功能不依赖它）
+  {
+    const ff = ffmpegInfo()
+    add('抽帧 ffmpeg（可选）', true, ff.ok
+      ? `${ff.version.split(' Copyright')[0]} —— shots 可用 ✓`
+      : '没装 —— 只有「抽帧九宫格」（shots）用得到；装：winget/brew/apt install ffmpeg，或用 $FFMPEG 指路径')
   }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -226,7 +238,7 @@ export async function cmdVideo(flags, positional) {
     }
     const sub = pickSubtitle(info)
     if (!sub) {
-      console.log(`--- 字幕 ---\n  （没有可用字幕${info.need_login_subtitle ? ' —— AI 字幕要登录态才给，先跑 whoami 查 cookie' : ' —— 这条只能凭简介/弹幕/热评理解，发言前掂量探量'}）`)
+      console.log(`--- 字幕 ---\n  （没有可用字幕${info.need_login_subtitle ? ' —— AI 字幕要登录态才给，先跑 whoami 查 cookie' : ' —— 这条只能凭简介/弹幕/热评理解' + (ffmpegPath() ? '；画面就 shots <BV> 抽一张九宫格看' : '') + '，发言前掂量探量'}）`)
     } else {
       const lines = await getSubtitleLines(bvid, sub, cred)
       const all = flowText(lines.map((l) => l.text))
@@ -278,6 +290,78 @@ async function readTranscript(bvid, v, cred, readArg) {
   if (!sel.length) { console.log(`（${fmtDur(from)} 之后这段没有字幕 —— 换个区间，或 --read 全文）`); return }
   console.log(`=== 《${v.title}》字幕（${subKind(sub)}${to === Infinity ? ' · 全文' : ` · ${fmtDur(from)}–${fmtDur(to)}`}）===`)
   console.log(flowText(sel.map((l) => l.text)))
+}
+
+// ── shots：抽帧九宫格（等间隔 N 帧拼一张图，补上「字幕之外」的画面）──────────────
+// 依赖 ffmpeg（可选）：直接把 B 站直链喂给它，按 `-ss` 远程 seek 各取一帧，最后 tile 拼图。
+// 不落整段视频 —— 长视频也只按需读几个字节范围，磁盘和内存都不受视频长度影响。
+const QN_TEXT = { 16: '360P', 32: '480P', 64: '720P', 74: '720P60', 80: '1080P', 112: '1080P+', 116: '1080P60', 120: '4K' }
+
+export async function cmdShots(flags, positional) {
+  const bvid = String(positional[0] ?? '')
+  if (!BV_RE.test(bvid)) { console.error('用法: node bili.mjs shots <BV号> [--grid 3x3] [--p 1] [--out 目录]'); process.exit(2) }
+  const grid = String(flags.get('grid') ?? '3x3')
+  const m = /^(\d)x(\d)$/.exec(grid)
+  const cols = Number(m?.[1]), rows = Number(m?.[2])
+  if (!m || cols < 1 || rows < 1 || cols > 6 || rows > 6) { console.error('--grid 要写成 3x3 / 4x4 这样（每边 1–6 格）'); process.exit(2) }
+  const N = cols * rows
+  const p = Math.max(1, Number(flags.get('p') ?? 1) || 1)
+
+  const ff = requireFfmpeg()          // 没装就现在报，别等抽到一半
+  const cred = loadCred()
+  const v = await getView(bvid, cred)
+  const pages = Array.isArray(v.pages) && v.pages.length ? v.pages : [v]
+  const page = pages[p - 1]
+  if (!page?.cid) throw new Error(`这条只有 ${pages.length} P —— --p 最多到 ${pages.length}`)
+  const dur = Number(page.duration) || Number(v.duration) || 0
+  if (dur < 1) throw new Error('拿不到视频时长（互动视频 / 直播回放）—— 抽不了帧')
+
+  const play = await getPlayUrl(bvid, page.cid, cred)
+  // 多段视频（老的长视频）只有第一段能抽 —— 把时间点压缩到这一段里，别在后半段白等
+  const span = play.seconds > 1 ? Math.min(dur, play.seconds) : dur
+  console.log(`=== 《${v.title}》抽帧 ${cols}×${rows} ===`)
+  console.log(`UP: ${v.owner?.name}   时长: ${fmtDur(dur)}${p > 1 ? `   第 ${p} P` : ''}   画质: ${QN_TEXT[play.quality] ?? play.quality}${play.segments > 1 ? `（分 ${play.segments} 段，只抽前 ${fmtDur(span)}）` : ''}`)
+
+  // 每格取「该格时间窗的中点」：开头常是黑场/片头，结尾常是黑场，掐头去尾各半格
+  const times = Array.from({ length: N }, (_, i) => Math.min(span - 0.2, Math.max(0, ((i + 0.5) * span) / N)))
+  console.log(`时间点: ${times.map((t, i) => `${i + 1}=${fmtDur(Math.round(t))}`).join('  ')}`)
+
+  // 格子尺寸跟视频自身比例走（竖屏就 360×640），保证拼图不变形
+  const dw = Number(v.dimension?.width) || 16
+  const dh = Number(v.dimension?.height) || 9
+  const even = (n) => Math.max(2, Math.round(n / 2) * 2)
+  const cw = even(dw >= dh ? 640 : (640 * dw) / dh)
+  const ch = even(dw >= dh ? (640 * dh) / dw : 640)
+  const vf = `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2:color=black`
+  const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`
+
+  const outDir = String(flags.get('out') ?? '') ? path.resolve(String(flags.get('out'))) : SHOTS_DIR
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const sheet = path.join(outDir, `${bvid}${p > 1 ? `-p${p}` : ''}-${stamp}-${cols}x${rows}.jpg`)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-shots-'))
+  try {
+    for (let i = 0; i < N; i += 1) {
+      const f = path.join(tmp, `f${String(i).padStart(2, '0')}.jpg`)
+      runFfmpeg(ff, [
+        '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+        '-headers', headers, '-ss', times[i].toFixed(2), '-i', play.url,
+        '-frames:v', '1', '-vf', vf, '-q:v', '2', f,
+      ], { timeout: 120_000 })
+      if (!fs.existsSync(f) || fs.statSync(f).size < 1000) throw new Error(`第 ${i + 1} 帧（${fmtDur(Math.round(times[i]))}）没抽出来`)
+      process.stdout.write(`  抽帧 ${i + 1}/${N} ✓\r`)
+    }
+    fs.mkdirSync(outDir, { recursive: true })
+    runFfmpeg(ff, [
+      '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', path.join(tmp, 'f%02d.jpg'), '-vf', `tile=${cols}x${rows}`, '-frames:v', '1', '-q:v', '2', sheet,
+    ], { timeout: 60_000 })
+    if (!fs.existsSync(sheet)) throw new Error('拼图没生成 —— 换 --grid 少抽几帧再试')
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+  console.log(`\n✓ 九宫格: ${sheet}`)
+  console.log(`  一格 ${cw}×${ch}，按行读（1 左上 → ${N} 右下）；把路径交给看图工具看一眼 ✓`)
+  console.log('  图看不清就 --grid 4x4（更细）、--p 2 换一 P；字幕有官方轨时先 --read，抽帧是补画面那一路')
 }
 
 export async function cmdComment(flags, positional) {

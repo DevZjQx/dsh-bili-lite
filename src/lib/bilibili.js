@@ -202,6 +202,38 @@ export async function getPlayerInfo(bvid, cid, cred) {
   return j.data ?? {}
 }
 
+/** 播放直链（抽帧用）：先要 mp4（fnval=1，durl），拿不到再退 dash 的视频流。
+ *  实测：qn=80 + platform=pc + high_quality=1 才给到 720P+；匿名只有 360P（抽帧也吃登录态）。
+ *  走 plain playurl 而不是 wbi 版：实测 wbi 版在匿名/无 buvid 时直接 412（会误伤熔断），
+ *  plain 版带 cookie + referer 就够（qn 由登录态决定）。
+ *  返回 { url, quality, segments, seconds } —— seconds 是这条直链覆盖的时长（多段视频只有第一段） */
+export async function getPlayUrl(bvid, cid, cred, { qn = 80 } = {}) {
+  const referer = `https://www.bilibili.com/video/${bvid}/`
+  const ask = async (fnval) => {
+    const qs = new URLSearchParams({
+      bvid, cid: String(cid), qn: String(qn), fnval: String(fnval), fnver: '0', fourk: '1', platform: 'pc', high_quality: '1',
+    })
+    return apiGet(`https://api.bilibili.com/x/player/playurl?${qs}`, { cred, referer })
+  }
+  const j = await ask(1)
+  if (Number(j.code) !== 0) throw new Error(`播放地址 ${explainCode(j.code)}${j.message ? '（' + j.message + '）' : ''}`)
+  const durl = j.data?.durl ?? []
+  if (durl.length) {
+    return {
+      url: String(durl[0].url), quality: j.data.quality, segments: durl.length,
+      seconds: Math.round(Number(durl[0].length ?? 0) / 1000) || 0,
+    }
+  }
+  // 没有 mp4（新视频常只给 dash）：退一步拿视频流，ffmpeg 照样能读
+  const d = await ask(16)
+  const vs = d.data?.dash?.video ?? []
+  if (!vs.length) throw new Error('拿不到视频流（互动视频 / 付费 / 港澳台限定抽不了帧）')
+  const best = vs.reduce((a, b) => (Number(b.id) > Number(a.id) ? b : a), vs[0])
+  const url = String(best.baseUrl ?? best.base_url ?? '')
+  if (!url) throw new Error('video 流地址为空 —— 稍后再试')
+  return { url, quality: best.id, segments: 1, seconds: 0 }
+}
+
 /** 选一条字幕：人工 CC 优先（质量高），AI 生成兜底（覆盖广） */
 export const pickSubtitle = (info) => {
   const subs = info?.subtitle?.subtitles ?? []

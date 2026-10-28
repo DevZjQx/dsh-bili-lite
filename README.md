@@ -9,13 +9,13 @@
 >
 > 参考 [dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale) 的理念
 > （自主节律 + 偏好 + 克制），砍到最小可用：**3 个运行面**（宿主插件 / 设置页 / agent CLI），
-> 没有抽帧、没有私信/弹幕/动态 —— 只保留「自己过日子」的那条主线。
+> 没有私信/弹幕/动态 —— 只保留「自己过日子」的那条主线（想看图，一条命令抽张九宫格，可选）。
 
 ## 它每天干什么
 
 - **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `node bili.mjs schedule add --daily 21:00 --label "晚刷"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
 - **自己挑**：照「爱看」关键词搜 + 热门补位，排除看过的 / 不爱看的
-- **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）
+- **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
 - **写日记**：`~/.dsh/bili-lite-diary.md`，一天几段
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；先 `--dry` 看一眼再 `--go`）
 - **克制**：撞到风控（412 / 验证码 / 限流）**立刻熔断停手**
@@ -34,6 +34,7 @@
 ## 装
 
 **前提**：Node 18+（插件用系统 node 跑 `src/features/bili-agent/bili.mjs`；找不到时可设 `DSH_NODE` 指向真实 node）。
+抽帧九宫格另需 **ffmpeg**（可选，见下文；不装只是少画面那一路）。
 
 ```bash
 # 1) 装插件（本地目录 / npm 都行）
@@ -92,10 +93,28 @@ node src/features/bili-agent/bili.mjs whoami         # cookie 是哪个号
 node src/features/bili-agent/bili.mjs feed [--n 5]   # 今天的候选（只读）
 node src/features/bili-agent/bili.mjs video <BV>     # 看懂一条：章节/字幕试读/弹幕热词/热评（只读）
 node src/features/bili-agent/bili.mjs video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
+node src/features/bili-agent/bili.mjs shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
 node src/features/bili-agent/bili.mjs comment <BV> --message "…" --dry|--go
 node src/features/bili-agent/bili.mjs diary <text…>  # 写日记 / diary show 看
 node src/features/bili-agent/bili.mjs ledger         # 今天的额度账本
 ```
+
+## 抽帧九宫格（可选，要 ffmpeg）
+
+字幕/弹幕/热评都说不到「画面上是什么」时，让它自己看一眼：
+
+```bash
+node src/features/bili-agent/bili.mjs shots <BV>                     # 3×3 等间隔 9 帧，拼一张图
+node src/features/bili-agent/bili.mjs shots <BV> --grid 4x4 --p 2    # 更细 / 换一 P
+```
+
+输出落在 `~/.bili-lite/shots/<BV>-<时间>-3x3.jpg`，把路径交给看图工具读一眼即可。
+
+- **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，
+  或用环境变量 `FFMPEG=/绝对路径/ffmpeg` 指，或把它放到 `~/.bili-lite/bin/ffmpeg`；`selftest` 会显示装没装。
+- **不装也不影响别的**：只有 `shots` 报错，`video` / `feed` / `comment` 照常。
+- **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
+- **画质跟登录态走**：匿名只有 360P，登录后一般 720P（多段老视频只抽第一段，会提示）。
 
 ## 人设（可选）
 
@@ -112,6 +131,7 @@ node src/features/bili-agent/bili.mjs ledger         # 今天的额度账本
 | `~/.bili-lite/ledger.json` | 写额度 / 判重账本（comment / watch 都记） |
 | `~/.bili-lite/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
 | `~/.bili-lite/persona.md` | 人设（可选） |
+| `~/.bili-lite/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
 | `~/.dsh/bili-lite-diary.md` | 日记 |
 | `~/.dsh/bili-lite-work/` | 它的专用会话工作目录 |
 
@@ -128,6 +148,7 @@ src/
 ├── lib/                         # 共享：B 站 HTTP 客户端（节流/焸断/WBI/扫码登录）+ 二维码编码器 + 小工具
 │   ├── bilibili.js
 │   ├── qrcode.js
+│   ├── ffmpeg.js                # 抽帧的可选依赖：定位/调用/体检（没装就只 shots 用不了）
 │   ├── json-file.js
 │   └── http.js
 └── features/
@@ -146,8 +167,8 @@ src/
 
 | | whale | lite |
 |---|---|---|
-| 代码文件 | ~50 个 | ~15 个（3 个运行面） |
-| 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评（无抽帧，深读自己 --read） |
+| 代码文件 | ~50 个 | ~17 个（3 个运行面） |
+| 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评+抽帧九宫格（要 ffmpeg，可选：没装就只少画面这一路） |
 | 写 | 评论/私信/弹幕/动态/收藏 | 仅评论 |
 | 登录 | 扫码 + 手动 cookie | 扫码 + 手动 cookie（同一份二维码编码器，终端出图形、设置页出 SVG） |
 | 监听 | 评论/私信/直播间轮询 | 无（只有心跳） |

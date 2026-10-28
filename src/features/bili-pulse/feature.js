@@ -39,7 +39,7 @@ export function startPulse({ getSession, route, cliPath, log = (m) => { try { co
     return head + [titleLine, '',
       '你在 DSH 里替主人运营这个 B 站账号 —— 你和他**共用一个身份**：你发的每条评论都是以主人的名义公开出现，他自己都看得到，不需要也不要 @ 任何人。唯一的工具：',
       `  node ${cliPath} <子命令>`,
-      '常用（别跳步）：selftest（有 ✗ 先照提示修）→ feed（从候选里挑想看的）→ video <BV>（章节/字幕/弹幕热词/热评都过一眼，好奇就 --read 深读，读不要钱、不截断）→ diary（给自己写一段）→ 最多挑 1 条值得发的 comment <BV>（先 --dry 再 --go）。',
+      '常用（别跳步）：selftest（有 ✗ 先照提示修）→ feed（从候选里挑想看的）→ video <BV>（章节/字幕/弹幕热词/热评都过一眼，好奇就 --read 深读，读不要钱、不截断；讲的是画面/界面而字幕说不清，就 shots <BV> 抽一张九宫格看一眼）→ diary（给自己写一段）→ 最多挑 1 条值得发的 comment <BV>（先 --dry 再 --go）。',
       '',
       '克制（一半写死在工具里，一半在你心里）：',
       `  · 今天写额度 ≤${Math.max(0, Number(cfg.quota?.writeDaily ?? DEFAULTS.quota.writeDaily))} 条；同一视频 7 天只评一次；拿不准先跑 ledger 对账；`,

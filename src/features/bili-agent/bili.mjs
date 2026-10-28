@@ -9,6 +9,8 @@
 //   node bili.mjs video <BV> [--read 全文|mm:ss-mm:ss]
 //                                       看懂一条：概览（章节/字幕试读/弹幕热词/热评）；
 //                                       --read 深读字幕，不截断（只读）
+//   node bili.mjs shots <BV> [--grid 3x3] [--p 1] [--out 目录]
+//                                       抽帧九宫格：等间隔抽 N 帧拼一张图（要 ffmpeg，可选）
 //   node bili.mjs comment <BV> --message "…" --dry|--go
 //                                       发一条评论（唯一写操作；必须显式 --dry 或 --go）
 //   node bili.mjs diary <text…>         写日记 / diary show 看最近
@@ -27,7 +29,7 @@
 // 从不 import 它的代码。
 // ============================================================================
 import { pathToFileURL } from 'node:url'
-import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdComment, cmdDiary, cmdLedger, cmdSchedule, HELP } from './commands.js'
+import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdDiary, cmdLedger, cmdSchedule, HELP } from './commands.js'
 
 function parseArgs(rest) {
   const flags = new Map(), positional = []
@@ -50,6 +52,7 @@ if (invokedDirectly) {
     else if (cmd === 'whoami') await cmdWhoami()
     else if (cmd === 'feed') await cmdFeed(flags)
     else if (cmd === 'video') await cmdVideo(flags, positional)
+    else if (cmd === 'shots') await cmdShots(flags, positional)
     else if (cmd === 'comment') await cmdComment(flags, positional)
     else if (cmd === 'diary') await cmdDiary(positional)
     else if (cmd === 'ledger') await cmdLedger()

@@ -16,5 +16,7 @@ export const BAN_FILE = path.join(DATA_DIR, 'api-ban.json')
 export const CACHE_FILE = path.join(DATA_DIR, 'api-cache.json')
 export const DIARY_FILE = path.join(DSH_HOME, 'bili-lite-diary.md')
 export const PERSONA_FILE = path.join(DATA_DIR, 'persona.md')
+/** 抽帧九宫格的落点（shots 生成，agent 再拿路径去看图） */
+export const SHOTS_DIR = path.join(DATA_DIR, 'shots')
 /** 它的专用会话工作目录（心跳 / agent 会话都在这里跑） */
 export const WORK_DIR = path.join(DSH_HOME, 'bili-lite-work')
