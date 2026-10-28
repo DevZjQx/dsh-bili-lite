@@ -12,8 +12,9 @@
 //                                       --read 深读字幕，不截断（只读）
 //   bun bili.ts shots <BV> [--grid 3x3] [--p 1] [--out 目录]
 //                                       抽帧九宫格：等间隔抽 N 帧拼一张图（要 ffmpeg，可选）
-//   bun bili.ts comment <BV> --message "…" --dry|--go
-//                                       发一条评论（必须显式 --dry 或 --go）
+//   bun bili.ts comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
+//                                       发一条评论；--reply 回到某条评论下面
+//   bun bili.ts inbox [--n 5] [--all] 收件箱：谁 @ 了你 / 谁回了你（只读）
 //   bun bili.ts interact <BV|UID> --like | --follow [--undo] [--dry|--go]
 //                                       点赞 / 关注（一次一件；同样先 --dry 再 --go）
 //   bun bili.ts diary <text…>         写日记 / diary show 看最近
@@ -35,7 +36,7 @@
 // ============================================================================
 import { pathToFileURL } from 'node:url';
 import { migrateLegacy } from '../../config/migrate.js';
-import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInteract, cmdDiary, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.js';
+import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdDiary, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.js';
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
 function parseArgs(rest) {
     const flags = new Map();
@@ -70,6 +71,8 @@ if (invokedDirectly) {
             await cmdShots(flags, positional);
         else if (cmd === 'comment')
             await cmdComment(flags, positional);
+        else if (cmd === 'inbox')
+            await cmdInbox(flags);
         else if (cmd === 'interact')
             await cmdInteract(flags, positional);
         else if (cmd === 'diary')

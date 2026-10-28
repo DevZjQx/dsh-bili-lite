@@ -17,6 +17,12 @@ export interface LedgerEntry {
   target?: string
   /** interact 的动作：like / follow */
   action?: string
+  /** comment 的回复目标：被回复的那条评论 rpid（顶层评论不填）—— 回复的判重按它算 */
+  rpid?: number
+  /** comment 的楼层根 rpid：回楼中楼时才有（顶层评论的回复两者相同） */
+  root?: number
+  /** 我们自己这条评论的 rpid（B 站回执里带的，公开可见性核对用） */
+  newRpid?: number
   /** 取消类（取消赞 / 取关）：不占额度，也不参与判重 */
   undo?: true
   note?: string
@@ -62,6 +68,12 @@ export function interactedWithin(target: string, action: string, days = 7): bool
 
 export function commentedWithin(bvid: string, days = 7): boolean {
   return readLedger().log.some((x) => x.type === 'comment' && x.bvid === bvid
+    && Date.now() - new Date(x.at).getTime() < days * 86_400_000)
+}
+
+/** 同一条评论 7 天内回过没有 —— 回复的判重键是 rpid，不是 BV 号（同一视频下可以分别回不同的人） */
+export function repliedWithin(rpid: string | number, days = 7): boolean {
+  return readLedger().log.some((x) => x.type === 'comment' && String(x.rpid ?? '') === String(rpid)
     && Date.now() - new Date(x.at).getTime() < days * 86_400_000)
 }
 

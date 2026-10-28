@@ -20,6 +20,8 @@ export const LEDGER_FILE = path.join(WORK_DIR, 'ledger.json');
 export const SCHEDULE_FILE = path.join(WORK_DIR, 'schedule.json'); // 它自己排的作息/定时任务（lib/schedule 唯一真相）
 export const BAN_FILE = path.join(WORK_DIR, 'api-ban.json');
 export const CACHE_FILE = path.join(WORK_DIR, 'api-cache.json');
+/** 收件箱（谁 @ 了我 / 谁回了我）：已看过的消息 id + 翻页水位 —— 只用于「哪条是新的」 */
+export const INBOX_FILE = path.join(WORK_DIR, 'inbox.json');
 export const DIARY_FILE = path.join(WORK_DIR, 'diary.md');
 export const PERSONA_FILE = path.join(WORK_DIR, 'persona.md');
 /** 抽帧九宫格的落点（shots 生成，agent 再拿路径去看图） */

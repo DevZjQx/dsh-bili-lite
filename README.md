@@ -1,10 +1,10 @@
-# dsh-bili-lite 0.1.0
+# dsh-bili-lite 0.2.0
 
 > Bun + TypeScript：源码全是 `.ts`，Bun 直接跑 CLI，宿主半边编译成 `dist/` 的普通 ESM（DSH 用 Node 加载，无感）。
 >
 > 极简版「让 AI 自己运营 B 站」：给 DSH 装一个 B 站分身 —— 它**自己规划作息**：什么时候刷、
 > 看什么、看不看，全部它自己定；刷候选、真看懂（章节 + 字幕 + 弹幕热词 + 热评）、
-> 写日记；值得的发一条评论，真喜欢就点个赞 / 关注 UP。
+> 写日记；值得的发一条评论，真喜欢就点个赞 / 关注 UP；有人 @ 它 / 回它，它自己决定回不回。
 >
 > **单账号模型**：AI 与主人**共用一个号** —— 它发的每条评论、每个赞都以你的身份出现，
 > 你自己都看得到，不需要、也不会去 @ 谁。
@@ -21,13 +21,15 @@
 - **写日记**：`~/.dsh/bili-lite-work/diary.md`，一天几段
 - **互动**：真喜欢就点赞 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；先 `--dry` 看一眼再 `--go`）
+- **有人找它**：`inbox` 拉一次收件箱（谁 @ 了它 / 谁回了它，只读），它自己判断回不回 ——
+  值得回就用 `comment <BV> --reply <rpid>` 回到那条评论下面（跟评论共用同一个每日额度，同一条评论 7 天只回一次）
 - **克制**：撞到风控（412 / 验证码 / 限流）**立刻熔断停手**
 
 ## 它不会做什么（写死在代码里）
 
 - ❌ 私信 / 群发 / 花钱（充电）/ 弹幕 / 动态
-- ❌ 每天评论超过 `quota.writeDaily`（默认 **3**）条、互动超过 `quota.interactDaily`（默认 **10**）次
-- ❌ 同一视频 7 天内评第二次 / 同一种互动做第二次（取消赞、取关是在纠正，不占额度也不判重；取消后可以再做，判重看最后一条记录）
+- ❌ 每天评论 + 回复超过 `quota.writeDaily`（默认 **3**）条、互动超过 `quota.interactDaily`（默认 **10**）次
+- ❌ 同一视频 7 天内评第二次 / 同一条评论 7 天内回第二次 / 同一种互动做第二次（取消赞、取关是在纠正，不占额度也不判重；取消后可以再做，判重看最后一条记录）
 - ❌ 用 @ 招呼陌生人（评论正文里带 @ 直接拒绝 ✓ 共用账号更不该拉山头）
 - ❌ 不带 `--dry` / `--go` 的写命令（拒绝裸跑）
 - ❌ 凭据回显（cookie 只写 `~/.dsh/bili-lite-work/credentials.json`，权限 0600）
@@ -73,6 +75,8 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 - 它的评论、点赞、关注都记在**你的号**上，说错话是你在承担：把「每天最多写几条 / 互动几次」设小一点
   （评论默认 3、互动默认 10；想更稳就调小；设 0 = 只看、只写日记、不发言）
 - 它不会用 @ 去招呼陌生人（工具里写死：评论正文带 @ 直接拒绝）✓
+- 有人 @ 它 / 回它时，它跑 `inbox` 看一眼再自己判断回不回 —— 回一条也署你的名、也占当天评论额度，
+  同一条评论 7 天内只回一次；不想让它跟人搭话就把每日额度调小（0 = 只看不发言）
 - 它每天写在哪：`~/.dsh/bili-lite-work/diary.md` —— 那是它干了什么的入口，也是它的心里话
 
 ## 权限（不用开完全访问）
@@ -119,6 +123,9 @@ bun src/features/bili-agent/bili.ts video <BV>     # 看懂一条：章节/字�
 bun src/features/bili-agent/bili.ts video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
 bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
 bun src/features/bili-agent/bili.ts comment <BV> --message "…" --dry|--go
+bun src/features/bili-agent/bili.ts comment <BV> --message "…" --reply <rpid> [--root <根rpid>] --dry|--go
+                                                     # 回到某条评论下面（rpid 从 inbox 给的那行抄）
+bun src/features/bili-agent/bili.ts inbox [--n 5] [--all]   # 收件箱：谁 @ 了你 / 谁回了你（只读）
 bun src/features/bili-agent/bili.ts interact <BV|UID> --like|--follow [--undo] --dry|--go
                                                      # 点赞 / 关注（一次一件；--undo 取消赞、取关）
 bun src/features/bili-agent/bili.ts diary <text…>  # 写日记 / diary show 看
@@ -160,7 +167,8 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 |---|---|
 | `~/.dsh/bili-lite-work/bili-lite.config.json` | 配置（**不含凭据**），设置页和工具链共用同一份 |
 | `~/.dsh/bili-lite-work/credentials.json` | cookie（0600，永不回显） |
-| `~/.dsh/bili-lite-work/ledger.json` | 写额度 / 判重账本（comment / interact / watch 都记） |
+| `~/.dsh/bili-lite-work/ledger.json` | 写额度 / 判重账本（comment / reply / interact / watch 都记） |
+| `~/.dsh/bili-lite-work/inbox.json` | 收件箱水位：哪些 @ / 回复已经看过、翻到哪儿了（只影响「哪条算新」） |
 | `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
 | `~/.dsh/bili-lite-work/persona.md` | 人设（可选） |
 | `~/.dsh/bili-lite-work/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
@@ -209,9 +217,9 @@ src/
 |---|---|---|
 | 代码文件 | ~50 个 | ~17 个（3 个运行面） |
 | 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评+抽帧九宫格（要 ffmpeg，可选：没装就只少画面这一路） |
-| 写 | 评论/私信/弹幕/动态/收藏/三连 | 评论 + 点赞/关注（限额 + 判重） |
+| 写 | 评论/私信/弹幕/动态/收藏/三连 | 评论 + 回复（限额 + 判重）+ 点赞/关注 |
 | 登录 | 扫码 + 手动 cookie | 扫码 + 手动 cookie（同一份二维码编码器，终端出图形、设置页出 SVG） |
-| 监听 | 评论/私信/直播间轮询 | 无（只有心跳） |
+| 监听 | 评论/私信/直播间轮询 | 无后台监听 —— 靠 `inbox` 拉一次收件箱（谁 @ / 谁回），跑一次看一次 |
 | 限额/熔断/判重 | ✓ | ✓（同样写死） |
 
 想升级再看 whale：`dsh plugin --profile desktop add dsh-bili-whale`。

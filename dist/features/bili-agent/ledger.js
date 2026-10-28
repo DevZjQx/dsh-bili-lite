@@ -40,6 +40,11 @@ export function commentedWithin(bvid, days = 7) {
     return readLedger().log.some((x) => x.type === 'comment' && x.bvid === bvid
         && Date.now() - new Date(x.at).getTime() < days * 86_400_000);
 }
+/** 同一条评论 7 天内回过没有 —— 回复的判重键是 rpid，不是 BV 号（同一视频下可以分别回不同的人） */
+export function repliedWithin(rpid, days = 7) {
+    return readLedger().log.some((x) => x.type === 'comment' && String(x.rpid ?? '') === String(rpid)
+        && Date.now() - new Date(x.at).getTime() < days * 86_400_000);
+}
 export function seenSet() {
     const seen = new Set();
     const led = readLedger();

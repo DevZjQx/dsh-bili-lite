@@ -385,3 +385,28 @@ export async function getDanmakuBrief(bvid, cid, cred, { topN = 10 } = {}) {
             dense = { from: min * 60, n };
     return { count: ds.length, top, dense };
 }
+/** 收件箱：kind='reply'（回复我的）/ 'at'（@我的）。cursor 传上一页返回的 cursor.id 翻后面的页。
+ *  翻页会重复给同一条（社区实现里踩过）—— 去重交给调用方 */
+export async function getMsgFeed(kind, cred, { cursor, pages = 1, referer = 'https://message.bilibili.com/' } = {}) {
+    const out = [];
+    let next = cursor ?? '';
+    for (let i = 0; i < Math.max(1, pages); i += 1) {
+        const qs = new URLSearchParams({ platform: 'web', build: '0', mobi_app: 'web', ...(next ? { cursor: next } : {}) });
+        const j = await apiGet(`https://api.bilibili.com/x/msgfeed/${kind}?${qs}`, { cred, referer });
+        if (Number(j.code) !== 0)
+            throw new Error(`收件箱 ${kind}：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
+        out.push(j.data ?? {});
+        next = String(j.data?.cursor?.id ?? '');
+        if (!next || j.data?.cursor?.is_end)
+            break;
+    }
+    return out;
+}
+/** 楼中楼：某条根评论（root = 它的 rpid）下面的回复。顺带返回 data.root（根评论本身）。
+ *  一级评论的回复也走这里 —— 这时 root 是被回复的那条评论 */
+export async function getThreadReplies(aid, root, cred, { pn = 1, ps = 20 } = {}) {
+    const j = await apiGet(`https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${aid}&root=${root}&pn=${pn}&ps=${ps}`, { cred });
+    if (Number(j.code) !== 0)
+        throw new Error(`楼层回读：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
+    return { root: j.data?.root, replies: j.data?.replies ?? [] };
+}

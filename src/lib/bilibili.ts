@@ -446,3 +446,79 @@ export async function getDanmakuBrief(bvid: string, cid: number | string, cred: 
   for (const [min, n] of buckets) if (!dense || n > dense.n) dense = { from: min * 60, n }
   return { count: ds.length, top, dense }
 }
+
+// ── 收件箱（谁 @ 了我 / 谁回了我）+ 楼中楼回读 —— 只读 ───────────────────
+// 这两条只在「回复别人」这条链上用：收件箱负责发现，楼中楼负责拿到「到底是谁说了什么」
+// 以及回复该挂在哪条评论下（parent）。字段语义官方没文档，全部按可空处理。
+
+export interface FeedUser { mid?: number | string; nickname?: string; uname?: string }
+export interface FeedItem {
+  subject_id?: number | string
+  root_id?: number | string
+  source_id?: number | string
+  target_id?: number | string
+  /** 1 = 视频；11 = 动态；12 = 专栏；17 = 音频 —— lite 只回视频评论 */
+  business_id?: number | string
+  title?: string
+  uri?: string
+  source_content?: string
+  target_reply_content?: string
+}
+export interface MsgFeedRow {
+  id?: number | string
+  user?: FeedUser
+  item?: FeedItem
+  reply_time?: number
+  at_time?: number
+}
+export interface MsgFeed {
+  items?: MsgFeedRow[]
+  cursor?: { id?: number | string; time?: number; is_end?: boolean }
+  last_view_at?: number
+}
+
+/** 收件箱：kind='reply'（回复我的）/ 'at'（@我的）。cursor 传上一页返回的 cursor.id 翻后面的页。
+ *  翻页会重复给同一条（社区实现里踩过）—— 去重交给调用方 */
+export async function getMsgFeed(
+  kind: 'reply' | 'at',
+  cred: Cred,
+  { cursor, pages = 1, referer = 'https://message.bilibili.com/' }: { cursor?: string; pages?: number; referer?: string } = {},
+): Promise<MsgFeed[]> {
+  const out: MsgFeed[] = []
+  let next = cursor ?? ''
+  for (let i = 0; i < Math.max(1, pages); i += 1) {
+    const qs = new URLSearchParams({ platform: 'web', build: '0', mobi_app: 'web', ...(next ? { cursor: next } : {}) })
+    const j = await apiGet<ApiEnvelope<MsgFeed>>(`https://api.bilibili.com/x/msgfeed/${kind}?${qs}`, { cred, referer })
+    if (Number(j.code) !== 0) throw new Error(`收件箱 ${kind}：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+    out.push(j.data ?? {})
+    next = String(j.data?.cursor?.id ?? '')
+    if (!next || j.data?.cursor?.is_end) break
+  }
+  return out
+}
+
+export interface ReplyRow {
+  rpid?: number | string
+  mid?: number | string
+  ctime?: number
+  parent?: number | string
+  root?: number | string
+  content?: { message?: string }
+  member?: { mid?: number | string; uname?: string }
+}
+
+/** 楼中楼：某条根评论（root = 它的 rpid）下面的回复。顺带返回 data.root（根评论本身）。
+ *  一级评论的回复也走这里 —— 这时 root 是被回复的那条评论 */
+export async function getThreadReplies(
+  aid: number | string,
+  root: number | string,
+  cred: Cred,
+  { pn = 1, ps = 20 }: { pn?: number; ps?: number } = {},
+): Promise<{ root?: ReplyRow; replies: ReplyRow[] }> {
+  const j = await apiGet<ApiEnvelope<{ root?: ReplyRow; replies?: ReplyRow[] }>>(
+    `https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${aid}&root=${root}&pn=${pn}&ps=${ps}`,
+    { cred },
+  )
+  if (Number(j.code) !== 0) throw new Error(`楼层回读：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+  return { root: j.data?.root, replies: j.data?.replies ?? [] }
+}
