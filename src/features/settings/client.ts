@@ -10,6 +10,12 @@
  * 本 feature 的任何模块，feature.ts 也不 import 它 —— 两半靠同一份 API 契约
  * （/dsh-bili-lite/api/*）与 config/store 的键清单对齐。
  * 类型也是自带的：浏览器里没有 npm 的 @types/react，这里只声明用得到的那四个方法。
+ *
+ * ⚠️ 禁止顶层声明：DSH 把多个插件的 client.js **拼进同一个 combo 脚本**
+ * （/plugins/??a/client.js,b/client.js）当普通脚本执行，顶层 const/let/function 落在同一个
+ * 全局词法作用域里 —— 以前这里写 `const loader = window.__ModuleLoader__`，和另一个插件
+ * 同样写法撞名，整个 combo 报 "Identifier 'loader' has already been declared"，插件直接不激活。
+ * 所以顶层只写表达式语句（window.__ModuleLoader__.load({...})），要局部变量就包 IIFE。
  */
 
 // ── 最小 React 契约（只用 createElement + 三个 hook；没有 JSX，构建后原样可用）──
@@ -40,9 +46,7 @@ interface DetailResp { ok: boolean; error?: string; detail?: string }
 interface SelftestResp { ok: boolean; error?: string; items?: Array<{ name: string; ok: boolean; detail: string }> }
 interface Field { group: string; path: string[]; label: string; hint: string; kind: 'text' }
 
-const loader = (window as unknown as { __ModuleLoader__: ModuleLoader }).__ModuleLoader__
-
-loader.load({
+;(window as unknown as { __ModuleLoader__?: ModuleLoader }).__ModuleLoader__?.load({
   id: "dsh-bili-lite",
   factory: (require) => {
     const module = { exports: {} as Record<string, unknown> };
