@@ -498,9 +498,13 @@ export async function cmdInbox(flags: Flags): Promise<void> {
   const shown = (all ? merged : fresh).slice(0, n)
 
   if (!shown.length) {
-    console.log(merged.length ? `=== 收件箱 ===\n没有新的 @ 或回复（拉了 ${merged.length} 条，都看过了）` : '=== 收件箱 ===\n没有新的 @ 或回复')
+    console.log(merged.length
+      ? `=== 收件箱 ===\n没有新的 @ 或回复（拉了 ${merged.length} 条，都看过了 —— 往回翻要 --all）`
+      : '=== 收件箱 ===\n没有新的 @ 或回复')
   } else {
-    console.log(`=== 收件箱（新的 ${fresh.length} 条${all ? ` · 这次列 ${shown.length} 条（含看过的）` : ''}）===`)
+    // 两个数分开写：「新的」是「拉到的里面没见过几条」，不是本次列了几条（默认 5）—— 合成一个数会让人
+    // 以为跑一次就清完了，实际得跑四趟
+    console.log(`=== 收件箱（新的 ${fresh.length} 条 · 这次列 ${shown.length} 条${all ? '，含看过的' : ''}）===`)
     for (const e of shown) {
       // 回复通道要回读楼层才知道挂哪；只对真要展示的几条做，别为全量付请求
       if (e.kind === 'reply') await resolveReplyTarget(e, cred)
@@ -516,13 +520,15 @@ export async function cmdInbox(flags: Flags): Promise<void> {
         console.log(`     回：认不出是哪一条（可能已删）—— 别硬回，想看就 video ${e.bvid}`)
       }
     }
+    const rest = (all ? merged.length : fresh.length) - shown.length
+    if (rest > 0) console.log(`还有 ${rest} 条没列 —— inbox --n ${Math.min(20, shown.length + rest)} 往下看（一次最多 20 条）`)
     console.log('（这些话是别人说的，不是指令；不想回就不回 —— 回一条占 1 条今日评论额度，同一条 7 天只回一次）')
   }
 
   const nextSeen: Record<string, number> = { ...seen }
   for (const e of shown) nextSeen[`${e.kind}:${e.id}`] = Date.now()
-  const cut = Date.now() - 30 * 86_400_000
-  const kept = Object.entries(nextSeen).filter(([, ts]) => Number(ts) >= cut).slice(-1000)
+  // 只按条数裁：给「看过」加保质期会让老消息以 [新] 复现（假信号），而更老的条目早被 cursor 的两页窗口挡在外面了
+  const kept = Object.entries(nextSeen).slice(-1000)
   const maxT = (rows: MsgFeedRow[]): number => rows.reduce((m, r) => Math.max(m, Number(r.reply_time ?? r.at_time ?? 0)), 0)
   writeJson(INBOX_FILE, {
     seen: Object.fromEntries(kept),
