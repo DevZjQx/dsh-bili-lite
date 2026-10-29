@@ -13,7 +13,7 @@ export const HOME: string = process.env.USERPROFILE || process.env.HOME || os.ho
 export const DSH_HOME: string = process.env.DSH_HOME || path.join(HOME, '.dsh')
 /** 它的专用会话工作目录（心跳 / agent 会话都在这里跑）= 沙箱可写根 */
 export const WORK_DIR: string = path.join(DSH_HOME, 'bili-lite-work')
-/** 数据根 = 会话工作区：cookie / 账本 / 计划 / 缓存 / 日记 / 人设 / 抽帧图都在这下面 */
+/** 数据根 = 会话工作区：cookie / 账本 / 计划 / 缓存 / 人设 / 抽帧图都在这下面 */
 export const DATA_DIR: string = WORK_DIR
 export const CFG_FILE: string = path.join(WORK_DIR, 'bili-lite.config.json')
 export const CRED_FILE: string = path.join(WORK_DIR, 'credentials.json')
@@ -23,7 +23,6 @@ export const BAN_FILE: string = path.join(WORK_DIR, 'api-ban.json')
 export const CACHE_FILE: string = path.join(WORK_DIR, 'api-cache.json')
 /** 收件箱（谁 @ 了我 / 谁回了我）：已看过的消息 id + 翻页水位 —— 只用于「哪条是新的」 */
 export const INBOX_FILE: string = path.join(WORK_DIR, 'inbox.json')
-export const DIARY_FILE: string = path.join(WORK_DIR, 'diary.md')
 export const PERSONA_FILE: string = path.join(WORK_DIR, 'persona.md')
 /** 抽帧九宫格的落点（shots 生成，agent 再拿路径去看图） */
 export const SHOTS_DIR: string = path.join(WORK_DIR, 'shots')

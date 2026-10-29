@@ -15,7 +15,7 @@ export interface ShareConfig { enabled: boolean }
 export interface RiskConfig { minGapMs: number }
 
 export interface Config {
-  /** 它叫什么（可空）：只用于心跳抬头 / 日记抬头 —— 插件不写死任何名字，留空就不点名 */
+  /** 它叫什么（可空）：只用于心跳抬头 —— 插件不写死任何名字，留空就不点名 */
   persona: PersonaConfig
   /** 账号自己（cookie 体检时自动回填；与主人共用一个身份） */
   self: SelfConfig

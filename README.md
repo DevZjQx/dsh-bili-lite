@@ -15,10 +15,10 @@
 
 ## 它每天干什么
 
-- **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `bun bili.ts schedule add --daily 21:00 --label "晚刷"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
+- **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `bun bili.ts schedule add --daily "HH:MM" --label "…"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
 - **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜，不给就热门里挑，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
 - **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
-- **写日记**：`~/.dsh/bili-lite-work/diary.md`，一天几段
+- **写日记**：它自己写 —— 用什么方式、写在哪个文件、按天还是按主题分篇、格式怎么写，全它自己定
 - **互动**：真喜欢就点赞 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；先 `--dry` 看一眼再 `--go`）
 - **有人找它**：`inbox` 拉一次收件箱（谁 @ 了它 / 谁回了它，只读），它自己判断回不回 ——
@@ -77,7 +77,7 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 - 它不会用 @ 去招呼陌生人（工具里写死：评论正文带 @ 直接拒绝）✓
 - 有人 @ 它 / 回它时，它跑 `inbox` 看一眼再自己判断回不回 —— 回一条也署你的名、也占当天评论额度，
   同一条评论 7 天内只回一次；不想让它跟人搭话就把每日额度调小（0 = 只看不发言）
-- 它每天写在哪：`~/.dsh/bili-lite-work/diary.md` —— 那是它干了什么的入口，也是它的心里话
+- 它每天写在哪：它自己的会话工作目录里 —— 位置、文件名、分篇方式它自己定，插件不规定；那是它干了什么的入口，也是它的心里话
 
 ## 权限（不用开完全访问）
 
@@ -124,7 +124,6 @@ bun src/features/bili-agent/bili.ts comment <BV> --message "…" --reply <rpid> 
 bun src/features/bili-agent/bili.ts inbox [--n 5] [--all]   # 收件箱：谁 @ 了你 / 谁回了你（只读）
 bun src/features/bili-agent/bili.ts interact <BV|UID> --like|--follow [--undo] --dry|--go
                                                      # 点赞 / 关注（一次一件；--undo 取消赞、取关）
-bun src/features/bili-agent/bili.ts diary <text…>  # 写日记 / diary show 看
 bun src/features/bili-agent/bili.ts ledger         # 今天的额度账本
 bun src/features/bili-agent/bili.ts taste [--days 30]  # 口味回顾：看过的 / 常看的 UP / 动过手的（只读）
 ```
@@ -150,7 +149,7 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 
 插件不内置任何人格，也不内置名字。想让它是谁，写一段放到 `~/.dsh/bili-lite-work/persona.md`：
 每次心跳时取**前 3000 字**附在最前面（清空文件 = 撤销）。它叫什么写在配置里（`persona.name`，
-设置页「人设」一栏）—— 只用于心跳抬头（`【<名字>心跳】`）和日记抬头，留空就不点名。
+设置页「人设」一栏）—— 只用于心跳抬头（`【<名字>心跳】`），留空就不点名（日记它自己写，插件不规定写法）。
 
 建议顺序：
 `# 我是谁` → `# 说话` → `# 我在意什么` → `# 我绝不会` → `# 日记怎么写 / 分享的标准`。
@@ -168,7 +167,7 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 | `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
 | `~/.dsh/bili-lite-work/persona.md` | 人设（可选） |
 | `~/.dsh/bili-lite-work/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
-| `~/.dsh/bili-lite-work/diary.md` | 日记 |
+| `~/.dsh/bili-lite-work/` 下的日记 | 它自己写的（文件名 / 位置 / 分篇 / 格式全由它定，插件不规定） |
 
 ## 开发（Bun + TypeScript）
 
@@ -198,7 +197,7 @@ src/
 └── features/
     ├── settings/                # 设置壳：宿主 API + 浏览器 section（docs/features/settings.md）
     ├── bili-pulse/              # 心跳：照它排的作息投拍，没排作息时兜底问一拍（docs/features/bili-pulse.md）
-    └── bili-agent/              # agent CLI：看/评/日记/账本（docs/features/bili-agent.md）
+    └── bili-agent/              # agent CLI：看/评/账本（docs/features/bili-agent.md）
 ```
 
 - 每个 feature 一个入口：`feature.ts`（CLI 按框架约定是 `bili.ts`）；`settings/client.ts` 是单文件加载的浏览器半边（零 import）。

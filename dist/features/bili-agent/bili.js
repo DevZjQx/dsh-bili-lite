@@ -17,7 +17,6 @@
 //   bun bili.ts inbox [--n 5] [--all] 收件箱：谁 @ 了你 / 谁回了你（只读）
 //   bun bili.ts interact <BV|UID> --like | --follow [--undo] [--dry|--go]
 //                                       点赞 / 关注（一次一件；同样先 --dry 再 --go）
-//   bun bili.ts diary <text…>         写日记 / diary show 看最近
 //   bun bili.ts ledger                今天的额度账本
 //   bun bili.ts taste [--days 30]     口味回顾：看过的 / 常看的 UP / 动过手的（只读，自己判断）
 //   bun bili.ts schedule …            自己排作息 / 定时任务（add / list / drop / clear）
@@ -35,7 +34,7 @@
 // 从不 import 它的代码。跑法：bun 直接吃 TypeScript，不需要先编译 ✓
 // ============================================================================
 import { pathToFileURL } from 'node:url';
-import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdDiary, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.js';
+import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.js';
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
 function parseArgs(rest) {
     const flags = new Map();
@@ -73,8 +72,6 @@ if (invokedDirectly) {
             await cmdInbox(flags);
         else if (cmd === 'interact')
             await cmdInteract(flags, positional);
-        else if (cmd === 'diary')
-            await cmdDiary(positional);
         else if (cmd === 'ledger')
             await cmdLedger();
         else if (cmd === 'taste')

@@ -1,9 +1,8 @@
 // ============================================================================
 // dsh-bili-lite · 账本 —— 额度 / 判重 / 「看过」的唯一真相（~/.dsh/bili-lite-work/ledger.json）
-// comment 与 watch 都记进来；日记里出现过的 BV 号也算「看过」。
+// comment 与 watch 都记进来；「看过」只看这份账本。
 // ============================================================================
-import fs from 'node:fs'
-import { LEDGER_FILE, DIARY_FILE } from '../../config/paths.ts'
+import { LEDGER_FILE } from '../../config/paths.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
 
 export type LedgerType = 'comment' | 'interact' | 'watch'
@@ -79,8 +78,6 @@ export function repliedWithin(rpid: string | number, days = 7): boolean {
 
 export function seenSet(): Set<string> {
   const seen = new Set<string>()
-  const led = readLedger()
-  for (const x of led.log) if (x.bvid) seen.add(x.bvid)
-  try { for (const bv of fs.readFileSync(DIARY_FILE, 'utf8').matchAll(/\bBV[0-9A-Za-z]{10}\b/g)) seen.add(bv[0]) } catch {}
+  for (const x of readLedger().log) if (x.bvid) seen.add(x.bvid)
   return seen
 }

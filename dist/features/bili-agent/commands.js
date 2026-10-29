@@ -1,12 +1,12 @@
 // ============================================================================
-// dsh-bili-lite · agent 命令实现（selftest / whoami / feed / video / comment / diary / ledger）
+// dsh-bili-lite · agent 命令实现（selftest / whoami / feed / video / comment / ledger）
 // 只有 CLI 入口（bili.mjs）调用这里；账本在 ledger.js，B 站 HTTP 在 lib/bilibili.js。
 // ============================================================================
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { config, writeConfig, DEFAULTS } from '../../config/store.js';
-import { CFG_FILE, CRED_FILE, DATA_DIR, DIARY_FILE, INBOX_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js';
+import { CFG_FILE, CRED_FILE, DATA_DIR, INBOX_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js';
 import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl, getMsgFeed, getThreadReplies } from '../../lib/bilibili.js';
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
@@ -66,7 +66,6 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   interact <BV|UID> --like | --follow [--undo] [--dry|--go]
                           点赞 / 关注（--undo 取消赞、取关）
                           一次只做一件；写操作必须 --dry 或 --go
-  diary <text…> | show    写日记 / 看最近
   ledger                  今天的额度账本
   taste [--days 30] [--n 15]
                           口味回顾：最近看过的、常看的 UP、动过手的（只读账本，自己判断）
@@ -145,17 +144,6 @@ export async function cmdSelftest(asJson) {
     }
     catch (e) {
         add('数据目录', false, `${DATA_DIR} 写不进去：${errMsg(e)}`);
-    }
-    try {
-        fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true });
-        if (!fs.existsSync(DIARY_FILE)) {
-            const nm = String(config().persona?.name ?? '').trim(); // 名字只在配置里（可空）
-            fs.writeFileSync(DIARY_FILE, `# ${nm ? nm + '的' : ''}日记\n\n`);
-        }
-        add('日记', true, `${DIARY_FILE} ✓`);
-    }
-    catch (e) {
-        add('日记', false, `${DIARY_FILE}：${errMsg(e)}`);
     }
     add('心跳', true, `兜底节拍每 ${Number(config().pulse?.everyMin) || 60} 分钟一拍 —— 只在它没排计划时走；排了计划（schedule add）宿主只按它的计划投拍 ✓`);
     try {
@@ -698,7 +686,7 @@ export async function cmdComment(flags, positional) {
         ...(parent ? { rpid: parent, root: actualRoot } : {}),
     });
     console.log(`✓ 已${parent ? `回复（parent rpid ${parent}）` : '发出'} · 新 rpid ${newRpid ?? '?'} · 今天已写 ${wrote.length + 1}/${limit}`);
-    console.log('把这条也记进 diary ✓（说了什么、为什么值得）');
+    console.log('想记就写进日记（说了什么、为什么值得 —— 怎么写、写进哪一篇，你自己定）');
 }
 // ── interact：点赞 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
 // 两种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
@@ -807,28 +795,6 @@ export async function cmdInteract(flags, positional) {
     }
     ledgerAppend({ type: 'interact', action, undo: undo || undefined, target: key, bvid: isBv ? target : undefined, note: `${what} ${isBv ? target : fid}` });
     console.log(`✓ 已${what}：${where}${action === 'follow' && isBv ? ` · UP ${v.owner?.name}` : ''}${undo ? '' : ` · 今天已互动 ${acted.length + 1}/${limit}`}`);
-}
-export async function cmdDiary(positional) {
-    if (positional[0] === 'show') {
-        const n = Math.min(100, Math.max(1, Number(positional[1] ?? 20)));
-        try {
-            const lines = fs.readFileSync(DIARY_FILE, 'utf8').trimEnd().split('\n');
-            console.log(lines.slice(-n).join('\n') || '（日记还是空的）');
-        }
-        catch {
-            console.log('（日记还是空的）');
-        }
-        return;
-    }
-    const text = positional.join(' ').trim();
-    if (!text) {
-        console.error('用法: bun bili.ts diary <今天的一段话>  |  diary show [N]');
-        process.exit(2);
-    }
-    fs.mkdirSync(path.dirname(DIARY_FILE), { recursive: true });
-    const stamp = new Date();
-    fs.appendFileSync(DIARY_FILE, `\n## ${stamp.toLocaleDateString('sv-SE')} ${stamp.toTimeString().slice(0, 5)}\n${text}\n`);
-    console.log(`✓ 写进 ${DIARY_FILE}`);
 }
 // ── schedule：它自己排作息 / 定时任务（写到 lib/schedule 的唯一真相；到点由宿主投「计划拍」）──
 const SCHEDULE_USAGE = `用法: bun bili.ts schedule <add|list|drop|clear> [参数]
