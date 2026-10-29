@@ -18,14 +18,28 @@ import { readJson, writeJson } from './json-file.js';
 export const MAX_PENDING = 30;
 export const MIN_EVERY_MIN = 5;
 export const MAX_EVERY_MIN = 1440;
+/** 保质期：daily / every 默认活 14 天，到期不续就自己消亡（回落兜底节拍） */
+export const DEFAULT_FOR_DAYS = 14;
+export const MAX_FOR_DAYS = 365;
+const DAY_MS = 86_400_000;
 const pad = (n) => String(n).padStart(2, '0');
 /** 仓库统一的时间展示：sv-SE → "YYYY-MM-DD HH:mm" */
 const fmtDate = (d) => d.toLocaleDateString('sv-SE') + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+/** 老数据（没有 expiresAt / fires）在读的时候补齐 —— 只算不写，下一次落盘自然带上 */
+function normalize(e) {
+    const out = { ...e, fires: Math.max(0, Number(e.fires) || 0) };
+    if (!out.expiresAt && (out.kind === 'daily' || out.kind === 'every')) {
+        const c = Date.parse(out.createdAt);
+        if (Number.isFinite(c))
+            out.expiresAt = new Date(c + (Number(out.forDays) || DEFAULT_FOR_DAYS) * DAY_MS).toISOString();
+    }
+    return out;
+}
 export function readPlan() {
     const p = readJson(SCHEDULE_FILE, {});
     return {
         seq: Number(p.seq) || 0,
-        entries: Array.isArray(p.entries) ? p.entries : [],
+        entries: Array.isArray(p.entries) ? p.entries.map(normalize) : [],
         fired: Array.isArray(p.fired) ? p.fired : [],
     };
 }
@@ -75,6 +89,14 @@ export function parseEvery(s) {
     }
     return min;
 }
+/** --for：保质期天数 —— "7d" / "7" → 7；1–365 天；不对就 throw */
+export function parseFor(s) {
+    const m = /^(\d+)\s*[d天]?$/i.exec(String(s ?? '').trim());
+    const n = m ? Number(m[1]) : NaN;
+    if (!Number.isFinite(n) || n < 1 || n > MAX_FOR_DAYS)
+        throw new Error(`--for 要在 1–${MAX_FOR_DAYS} 天之间（示例：7d、14、30）`);
+    return n;
+}
 /** 人话时间（展示用）：once → "2026-02-06 21:30"，daily → "每天 21:30"，every → "每 90 分钟" */
 export function fmtWhen(e) {
     if (e.kind === 'daily')
@@ -89,10 +111,12 @@ const cleanLabel = (s, kind) => String(s ?? '').replace(/\s+/g, ' ').trim().slic
  * 加一条（三种拍子给一个）：{ at?, daily?, every?, label? }
  * 返回 { entry, note }；排满了 / 参数不对 throw（CLI 把话带给模型）。
  */
-export function addEntry({ at, daily, every, label } = {}) {
+export function addEntry({ at, daily, every, label, forDays } = {}) {
     const given = [at !== undefined, daily !== undefined, every !== undefined].filter(Boolean).length;
     if (given !== 1)
         throw new Error('--at / --daily / --every 三选一，正好给一个');
+    if (at !== undefined && forDays !== undefined)
+        throw new Error('--at 是一次性的（发完即撤），不用 --for —— 保质期只给 --daily / --every');
     const p = readPlan();
     if (p.entries.length >= MAX_PENDING)
         throw new Error(`计划排满了（最多 ${MAX_PENDING} 条在排）—— 先 schedule drop 几条，或 clear 重排`);
@@ -114,11 +138,16 @@ export function addEntry({ at, daily, every, label } = {}) {
         const min = parseEvery(every);
         draft = { kind: 'every', everyMin: min, nextDue: new Date(Date.now() + min * 60_000).toISOString() };
     }
+    // 保质期只给 daily / every：到点不是为了执行到底，是留一个「还续不续」的复查点
+    const createdAt = new Date();
+    const days = draft.kind === 'once' ? null : parseFor(forDays ?? String(DEFAULT_FOR_DAYS));
     const entry = {
         ...draft,
         id: 's' + (p.seq + 1),
         label: cleanLabel(label, draft.kind),
-        createdAt: new Date().toISOString(),
+        createdAt: createdAt.toISOString(),
+        fires: 0,
+        ...(days ? { forDays: days, expiresAt: new Date(createdAt.getTime() + days * DAY_MS).toISOString() } : {}),
     };
     p.seq += 1;
     p.entries.push(entry);
@@ -139,11 +168,21 @@ export function clearPlan() {
     writePlan(p);
     return n;
 }
-/** 到点的（含错过补投：宿主刚起来也照发）；按 nextDue 排序，只读不写 */
+const expiryOf = (e) => {
+    const t = Date.parse(e.expiresAt ?? '');
+    return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+};
+/** 到点的（含错过补投：宿主刚起来也照发）；过期的不再投普通拍 —— 它该走「到期拍」。只读不写 */
 export function dueEntries(now = Date.now()) {
     return readPlan().entries
-        .filter((e) => Number.isFinite(Date.parse(e.nextDue)) && Date.parse(e.nextDue) <= now)
+        .filter((e) => Number.isFinite(Date.parse(e.nextDue)) && Date.parse(e.nextDue) <= now && expiryOf(e) > now)
         .sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue));
+}
+/** 到期的（保质期过了）—— 投一拍「还续不续」，投完由 markExpired 撤掉；只读不写 */
+export function dueExpired(now = Date.now()) {
+    return readPlan().entries
+        .filter((e) => expiryOf(e) <= now)
+        .sort((a, b) => expiryOf(a) - expiryOf(b));
 }
 /** 投完记账：once 删掉；daily/every 推到下一次；追一笔 fired（最多留 50 条） */
 export function markFired(ids, now = new Date()) {
@@ -154,6 +193,7 @@ export function markFired(ids, now = new Date()) {
         if (!hit.has(e.id))
             return true;
         done.push(e);
+        e.fires = (Number(e.fires) || 0) + 1; // 「第 N 次」靠它 —— 重复只有被数出来才看得见
         const hm = parseHHMM(e.at);
         if (e.kind === 'daily' && hm) {
             e.nextDue = nextDailyAt(hm.h, hm.m, now).toISOString();
@@ -174,6 +214,38 @@ export function markFired(ids, now = new Date()) {
         p.fired = p.fired.slice(-50);
     writePlan(p);
     return done;
+}
+/** 到期拍投完记账：这几条从计划里撤掉（不自动续）—— 计划空下来，兜底节拍接手 */
+export function markExpired(ids, now = new Date()) {
+    const p = readPlan();
+    const hit = new Set(ids);
+    const done = p.entries.filter((e) => hit.has(e.id));
+    p.entries = p.entries.filter((e) => !hit.has(e.id));
+    for (const e of done)
+        p.fired.push({ at: now.toISOString(), id: e.id, kind: e.kind, label: e.label });
+    if (p.fired.length > 50)
+        p.fired = p.fired.slice(-50);
+    writePlan(p);
+    return done;
+}
+/**
+ * 「第 N 次 · 排于 X 天前」—— 把「一直在重复」这件事数出来。
+ * 重复对人是无感的，对模型也是：不数出来，它就不会觉得这条便条已经老了。
+ */
+export function historyText(e, now = new Date(), upcoming = false) {
+    const fires = Math.max(0, Number(e.fires) || 0);
+    const c = Date.parse(e.createdAt);
+    const days = Number.isFinite(c) ? Math.floor((now.getTime() - c) / DAY_MS) : null;
+    const when = days === null ? '' : days <= 0 ? '今天排的' : `排于 ${days} 天前`;
+    const count = upcoming ? `第 ${fires + 1} 次` : `投过 ${fires} 次`;
+    return `${count}${when ? ' · ' + when : ''}`;
+}
+/** 保质期还剩几天（once 没有）—— 列表 / add 的回执用 */
+export function expiryText(e, now = new Date()) {
+    if (!Number.isFinite(expiryOf(e)))
+        return null;
+    const left = Math.ceil((expiryOf(e) - now.getTime()) / DAY_MS);
+    return left <= 0 ? '今天到期' : `还剩 ${left} 天`;
 }
 /** 设置页 / 状态用：在排几条、下一次什么时候 */
 export function planSummary(now = new Date()) {

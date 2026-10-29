@@ -11,7 +11,7 @@ import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, q
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.ts'
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.ts'
 import { writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.ts'
-import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN } from '../../lib/schedule.ts'
+import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, planSummary, expiryText, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN, DEFAULT_FOR_DAYS, MAX_FOR_DAYS } from '../../lib/schedule.ts'
 import { readJson, writeJson } from '../../lib/json-file.ts'
 import type { Cred, VideoView, VideoPage, NavResp, ViewResp, ApiEnvelope, SubtitleItem, MsgFeedRow } from '../../lib/bilibili.ts'
 
@@ -79,8 +79,9 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   ledger                  今天的额度账本
   taste [--days 30] [--n 15]
                           口味回顾：最近看过的、常看的 UP、动过手的（只读账本，自己判断）
-  schedule add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"]
+  schedule add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"] [--for 14d]
                           排一拍（一次性 / 每天 / 每隔 N 分钟）—— 到点宿主照投，带你自己写的标签
+                          daily / every 有保质期（默认 14 天）：到期投一拍问你还续不续，不续就自己撤掉
   schedule list           看排了什么（最近投过的也在）
   schedule drop <id>      撤一条；schedule clear 全撤（撤完宿主恢复兜底节拍）
 安全约定（代码强制）：
@@ -702,8 +703,9 @@ export async function cmdInteract(flags: Flags, positional: string[]): Promise<v
 
 // ── schedule：它自己排作息 / 定时任务（写到 lib/schedule 的唯一真相；到点由宿主投「计划拍」）──
 const SCHEDULE_USAGE = `用法: bun bili.ts schedule <add|list|drop|clear> [参数]
-  add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"]
+  add --at "21:30" | --at "2026-02-06 21:30" | --daily "09:00" | --every 90m [--label "…"] [--for 14d]
       三选一：一次性（今天/某天的某个点，过了会排到明天说一声）/ 每天 / 每隔 N 分钟（最短 ${MIN_EVERY_MIN}，最长 1 天）
+      保质期（--for，只给 daily / every）：默认 ${DEFAULT_FOR_DAYS} 天，1–${MAX_FOR_DAYS} 天。到期不自动续，宿主投一拍「还续不续」（续 / 改 / 不管都行），之后这条就撤了
   list                        看排了什么、下一次什么时候（最近投过的也在）
   drop <id>                   撤一条；clear 全撤 —— 撤完计划为空，宿主恢复兜底节拍
 计划非空时宿主只按你的计划投拍（固定兜底节拍暂停）—— 节奏拿回你自己手里 ✓`
@@ -718,11 +720,13 @@ export function cmdSchedule(positional: string[], flags: Flags): void {
         daily: flags.has('daily') ? String(flags.get('daily')) : undefined,
         every: flags.has('every') ? String(flags.get('every')) : undefined,
         label: flags.has('label') ? String(flags.get('label')) : undefined,
+        forDays: flags.has('for') ? String(flags.get('for')) : undefined,
       })
     } catch (e) { console.error(`✗ ${errMsg(e)}\n\n${SCHEDULE_USAGE}`); process.exit(2) }
     const e = r.entry
     console.log(`✓ 已排（id ${e.id}）：${fmtWhen(e)} —— ${e.label}`)
     if (r.note) console.log(`  （${r.note}）`)
+    if (e.expiresAt) console.log(`  保质期 ${e.forDays} 天（到 ${new Date(e.expiresAt).toLocaleString('sv-SE')}）—— 到期宿主投一拍问你还续不续，不续就自己撤掉；想多走几天就 --for`)
     console.log(`到点宿主把这一拍投进会话；在排 ${planSummary().pending}/${MAX_PENDING} 条。撤：bun bili.ts schedule drop ${e.id}`)
     return
   }
@@ -732,7 +736,10 @@ export function cmdSchedule(positional: string[], flags: Flags): void {
     else {
       console.log(`在排 ${p.entries.length}/${MAX_PENDING} 条（到点宿主照投，兜底节拍暂停）：`)
       for (const e of [...p.entries].sort((a, b) => Date.parse(a.nextDue) - Date.parse(b.nextDue))) {
-        console.log(`  [${e.id}] ${fmtWhen(e)} —— ${e.label}（下一拍 ${new Date(e.nextDue).toLocaleString('sv-SE')}）`)
+        const born = Date.parse(e.createdAt)
+        const days = Number.isFinite(born) ? Math.floor((Date.now() - born) / 86_400_000) : null
+        const age = days === null ? '' : days <= 0 ? ' · 今天排的' : ` · 排于 ${days} 天前`
+        console.log(`  [${e.id}] ${fmtWhen(e)} —— ${e.label}（下一拍 ${new Date(e.nextDue).toLocaleString('sv-SE')}；投过 ${Number(e.fires) || 0} 次${age}；${expiryText(e) ?? '一次性'}）`)
       }
     }
     const fired = p.fired.slice(-5).reverse()

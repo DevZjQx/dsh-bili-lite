@@ -20,7 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { json } from '../../lib/http.js';
 import { config, DEFAULTS } from '../../config/store.js';
 import { PERSONA_FILE, WORK_DIR } from '../../config/paths.js';
-import { dueEntries, markFired, planSummary, fmtWhen } from '../../lib/schedule.js';
+import { dueEntries, dueExpired, markFired, markExpired, planSummary, fmtWhen, historyText } from '../../lib/schedule.js';
 /** 她的专用会话：sessionId 固定 → 跨天保留上下文，而不是每天忘光 */
 const SESSION_ID = 'bili-lite';
 const CHECK_MS = 60_000; // 每分钟看一次「到拍没」；兜底节拍的粒度由 pulse.everyMin 定
@@ -71,16 +71,32 @@ catch { } } }) {
         return commonText(cfg, `【${nameOf(cfg)}心跳】现在是 ${now}。`) + '\n' + [
             '这一拍是兜底节拍（你还没排作息时宿主才问）：想不想看、什么时候看、今天看几条，全部你自己定 —— 可以开始刷、可以继续昨天没看完的、也可以什么都不干（什么都不干也是完整的一拍）。',
             '作息该你自己规划 —— 几点起、几点歇、一天几段，全你自己定：bun ' + cliPath + ' schedule 看用法（--at 一次性 / --daily 每天 / --every 每隔 N 分钟，都可带 --label 写清这一段想干嘛）。排了宿主就只按你的作息投拍（这条兜底节拍暂停），schedule clear 后恢复。排不排、怎么排都行。',
+            '作息是有保质期的（默认 14 天，--for 可改）：到期宿主投一拍问你还续不续，不续就自己撤掉、回到兜底节拍 —— 所以不用一次排到天荒地老，先试几天也成。',
         ].join('\n');
     }
-    /** 计划拍文案：投它自己排的那一拍，带它自己写的标签 */
-    function planBeatText(due, cfg) {
+    /**
+     * 计划拍文案：到点的照投它自己写的标签；到期的单独说 —— 到期不是「排错了」，
+     * 是这条便条该复查了（续 / 改 / 不管都行）。不逼它改，也不替它续。
+     */
+    function planBeatText(due, expired, cfg) {
         const now = new Date().toLocaleString('zh-CN', { hour12: false });
-        return commonText(cfg, `【${nameOf(cfg)}计划拍】现在是 ${now}。下面这拍是**你自己排**的：`) + '\n' + [
-            ...due.map((e) => `  · ${fmtWhen(e)} —— ${e.label}`),
-            '',
-            '按计划做就好；计划不对就当场改（schedule add / drop <id> / clear），别硬执行已经不对劲的计划。',
-        ].join('\n');
+        const title = expired.length
+            ? `【${nameOf(cfg)}计划到期】现在是 ${now}。`
+            : `【${nameOf(cfg)}计划拍】现在是 ${now}。`;
+        const lines = [];
+        if (expired.length) {
+            lines.push('下面这几条便条到期了（不是你排错，是它们到点了）：');
+            for (const e of expired)
+                lines.push(`  · ${fmtWhen(e)} —— ${e.label}（${historyText(e)}）`);
+            lines.push('', '续 / 改 / 不管，都行：', `  · 还想过就重排一条：bun ${cliPath} schedule add --daily "…" --label "…"（原来的点、原来的说法，或者换个过法）`, '  · 不想过了就什么都不用做 —— 计划空下来，宿主回到兜底节拍，一拍一拍地问你（不是催你）', '  · 这几条已经从计划里撤了，不会再来。', '');
+        }
+        if (due.length) {
+            lines.push('下面这拍是**你自己排**的：');
+            for (const e of due)
+                lines.push(`  · ${fmtWhen(e)} —— ${e.label}（${historyText(e, new Date(), true)}）`);
+            lines.push('', '这是你上次给自己留的便条，不是命令：照旧、换个过法、什么都不做，都算完整的一拍。便条本身不合适再改（schedule add / drop <id> / clear）。');
+        }
+        return commonText(cfg, title) + '\n' + lines.join('\n');
     }
     /** 能用的会话服务：没有 / 形状不对 → undefined（DSH 还没把 sessionController 准备好） */
     function controller() {
@@ -123,9 +139,10 @@ catch { } } }) {
         beating = true;
         try {
             const cfg = config();
-            const due = dueEntries();
-            const fallback = !due.length && planSummary().pending === 0 && Date.now() - lastBeat >= everyMs(cfg);
-            if (!due.length && !fallback)
+            const expired = dueExpired(); // 保质期过了：投一拍「还续不续」，投完撤掉
+            const due = dueEntries(); // 到点的普通计划拍（过期的不在这里）
+            const fallback = !expired.length && !due.length && planSummary().pending === 0 && Date.now() - lastBeat >= everyMs(cfg);
+            if (!expired.length && !due.length && !fallback)
                 return;
             // 会话服务没就绪（DSH 刚启动 / 刚装好插件）→ 不是故障，等下一拍；只提醒一次，不刷屏
             const c = controller();
@@ -149,14 +166,18 @@ catch { } } }) {
             }
             gated = null;
             gatedWarned = false;
-            if (due.length) {
-                await deliver(c, planBeatText(due, cfg));
-                markFired(due.map((e) => e.id));
+            if (expired.length || due.length) {
+                await deliver(c, planBeatText(due, expired, cfg));
+                // 投递成功才记账：失败就留到下一分钟重投（到期拍也一样，撤了就再也问不到了）
+                if (expired.length)
+                    markExpired(expired.map((e) => e.id));
+                if (due.length)
+                    markFired(due.map((e) => e.id));
                 lastBeat = Date.now();
                 beats++;
                 lastError = null;
                 failCount = 0;
-                log(`[bili-lite] 计划拍已投递（${due.map((e) => e.id).join(' ')}，第 ${beats} 拍）`);
+                log(`[bili-lite] 计划拍已投递（到期 ${expired.length} 条 / 到点 ${due.map((e) => e.id).join(' ') || '无'}，第 ${beats} 拍）`);
                 return;
             }
             await deliver(c, beatText(cfg));
