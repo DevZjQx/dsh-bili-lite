@@ -34,7 +34,7 @@
 - ❌ 同一视频 7 天内评第二次 / 同一条评论 7 天内回第二次 / 同一种互动做第二次（取消赞、取关是在纠正，不占额度也不判重；取消后可以再做，判重看最后一条记录）
 - ❌ 用 @ 招呼陌生人（评论正文里带 @ 直接拒绝 ✓ 共用账号更不该拉山头）
 - ❌ 不带 `--dry` / `--go` 的写命令（拒绝裸跑）
-- ❌ 凭据回显（cookie 只写 `~/.dsh/bili-lite-work/credentials.json`，权限 0600）
+- ❌ 凭据回显（cookie 只写 `~/.dsh/bili-lite-work/credentials.json`，文件 0600、目录 0700；日志 / 终端出口统一脱敏，设置页只回不可逆指纹）
 - ❌ 撞 412/风控码硬闯（自动熔断 5/10/20/30 分钟退避）
 - ❌ 计划无限堆 / 无限走（在排最多 30 条；`--every` 最短 5 分钟；`--daily` / `--every` 保质期最长 365 天，默认 14 天，到期必须它自己再表一次态）
 
@@ -163,7 +163,7 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 | 文件 | 作用 |
 |---|---|
 | `~/.dsh/bili-lite-work/bili-lite.config.json` | 配置（**不含凭据**），设置页和工具链共用同一份 |
-| `~/.dsh/bili-lite-work/credentials.json` | cookie（0600，永不回显） |
+| `~/.dsh/bili-lite-work/credentials.json` | cookie（0600，目录 0700，永不回显；设置页只显示 sha256 前 8 位指纹） |
 | `~/.dsh/bili-lite-work/ledger.json` | 写额度 / 判重账本（comment / reply / interact / watch 都记） |
 | `~/.dsh/bili-lite-work/inbox.json` | 收件箱水位：哪些 @ / 回复已经看过、翻到哪儿了（只影响「哪条算新」） |
 | `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |

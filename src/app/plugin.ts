@@ -14,6 +14,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { json } from '../lib/http.ts'
+import { redact } from '../lib/redact.ts'
 import { probeModel } from '../lib/model-ready.ts'
 import { CFG_FILE } from '../config/paths.ts'
 import { startPulse } from '../features/bili-pulse/feature.ts'
@@ -75,7 +76,7 @@ export default {
         handler: async (req, res) => {
           if (rejected(req, res)) return
           try { await handler(req, res) } catch (err) {
-            try { json(res, 500, { ok: false, error: String(err instanceof Error ? err.message : err) }) } catch {}
+            try { json(res, 500, { ok: false, error: redact(err instanceof Error ? err.message : err) }) } catch {}
           }
         },
       }))

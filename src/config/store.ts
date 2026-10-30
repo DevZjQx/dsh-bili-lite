@@ -62,5 +62,6 @@ export function config(): Config {
 
 export function writeConfig(next: Config): void {
   fs.mkdirSync(path.dirname(CFG_FILE), { recursive: true })
+  try { fs.chmodSync(path.dirname(CFG_FILE), 0o700) } catch {}   // 目录里还躺着凭据：默认只给本用户
   fs.writeFileSync(CFG_FILE, JSON.stringify(next, null, 2) + '\n')
 }

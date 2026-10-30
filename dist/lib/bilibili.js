@@ -28,9 +28,13 @@ export function loadCred() {
     const clean = (v) => String(v ?? '').replace(/^["'\s]+|["'\s]+$/g, '');
     return { sessdata: clean(j.sessdata), bili_jct: clean(j.bili_jct), buvid3: clean(j.buvid3), buvid4: clean(j.buvid4) };
 }
-/** 凭据落盘（0600）：设置页验证后与扫码成功后共用这一条路，不各写一份 */
+/** 凭据落盘（0600，目录 0700）：设置页验证后与扫码成功后共用这一条路，不各写一份 */
 export function saveCred(cred) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+    try {
+        fs.chmodSync(DATA_DIR, 0o700);
+    }
+    catch { }
     fs.writeFileSync(CRED_FILE, JSON.stringify(cred, null, 2) + '\n');
     try {
         fs.chmodSync(CRED_FILE, 0o600);

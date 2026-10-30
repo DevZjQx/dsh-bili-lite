@@ -5,14 +5,18 @@
  */
 import fs from 'node:fs';
 import { CRED_FILE } from '../../config/paths.js';
-/** 只回「能不能用」，不回显任何凭据内容 */
+import { credFingerprint } from '../../lib/redact.js';
+/** 只回「能不能用」+ 不可逆指纹，不回显任何凭据内容 */
 export function credState() {
     try {
         const c = JSON.parse(fs.readFileSync(CRED_FILE, 'utf8'));
-        return { present: true, hasSess: !!c.sessdata, hasJct: !!c.bili_jct, hasBuvid: !!(c.buvid3 || c.buvid4) };
+        return {
+            present: true, hasSess: !!c.sessdata, hasJct: !!c.bili_jct, hasBuvid: !!(c.buvid3 || c.buvid4),
+            fingerprint: credFingerprint(c.sessdata),
+        };
     }
     catch {
-        return { present: false, hasSess: false, hasJct: false, hasBuvid: false };
+        return { present: false, hasSess: false, hasJct: false, hasBuvid: false, fingerprint: '' };
     }
 }
 export function parseCookie(input = {}) {

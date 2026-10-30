@@ -22,6 +22,7 @@ import { config, DEFAULTS } from '../../config/store.ts'
 import type { Config } from '../../config/store.ts'
 import { PERSONA_FILE, WORK_DIR } from '../../config/paths.ts'
 import { dueEntries, dueExpired, markFired, markExpired, planSummary, fmtWhen, historyText } from '../../lib/schedule.ts'
+import { redact } from '../../lib/redact.ts'
 import type { ScheduleEntry, PlanSummary } from '../../lib/schedule.ts'
 import type { Route, SessionControllerLike } from '../../lib/dsh.ts'
 
@@ -62,6 +63,9 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
   let gated: string | null = null   // 最近一次检查发现的不投拍原因（状态接口用）
   let lastError: string | null = null
   let failCount = 0            // 连续失败次数：同样的原因不每分钟刷屏
+
+  /** 所有心跳日志的统一出口：抛错不外泄，且先把可能的凭据值打成 *** */
+  const emit = (m: string): void => { try { log(redact(m)) } catch {} }
 
   const everyMs = (cfg: Config): number => Math.max(1, Number(cfg.pulse?.everyMin) || DEFAULTS.pulse.everyMin) * 60_000
   /** 它的名字只来自配置（persona.name）—— 没配就不点名，插件里不写死任何名字 */
@@ -177,7 +181,7 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
       if (!c) {
         if (!notReadyWarned) {
           notReadyWarned = true
-          log('[bili-lite] 会话服务还没就绪（DSH 启动中或刚装好），暂不投拍，稍后自动重试')
+          emit('[bili-lite] 会话服务还没就绪（DSH 启动中或刚装好），暂不投拍，稍后自动重试')
         }
         return
       }
@@ -185,10 +189,10 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
       // 还会在会话里留下一次失败的 run）。恢复后下一拍自动继续。
       const blocked = await blockedReason()
       if (blocked !== undefined) {
-        gated = blocked
+        gated = redact(blocked)
         if (!gatedWarned) {
           gatedWarned = true
-          log(`[bili-lite] 暂不投拍：${blocked}（配好 API 凭证 / 模型后下一拍自动恢复）`)
+          emit(`[bili-lite] 暂不投拍：${blocked}（配好 API 凭证 / 模型后下一拍自动恢复）`)
         }
         return
       }
@@ -203,7 +207,7 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
         beats++
         lastError = null
         failCount = 0
-        log(`[bili-lite] 计划拍已投递（到期 ${expired.length} 条 / 到点 ${due.map((e) => e.id).join(' ') || '无'}，第 ${beats} 拍）`)
+        emit(`[bili-lite] 计划拍已投递（到期 ${expired.length} 条 / 到点 ${due.map((e) => e.id).join(' ') || '无'}，第 ${beats} 拍）`)
         return
       }
       await deliver(c, beatText(cfg))
@@ -211,14 +215,14 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
       beats++
       lastError = null
       failCount = 0
-      log(`[bili-lite] 心跳已投递（第 ${beats} 拍）`)
+      emit(`[bili-lite] 心跳已投递（第 ${beats} 拍）`)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = redact(e instanceof Error ? e.message : String(e))
       failCount++
       lastError = msg
       // 同一原因只在第一次、以及每半小时提一次 —— 投不出去时别每分钟刷同样的行
       if (failCount === 1 || failCount % 30 === 0) {
-        log(`[bili-lite] 拍投递失败（第 ${failCount} 次，下一分钟再试）：${msg}`)   // 计划没记账 → 下一拍重投 ✓
+        emit(`[bili-lite] 拍投递失败（第 ${failCount} 次，下一分钟再试）：${msg}`)   // 计划没记账 → 下一拍重投 ✓
       }
     } finally {
       beating = false
@@ -226,6 +230,7 @@ export function startPulse({ getSession, route, cliPath, probeReady, log = (m) =
   }
 
   fs.mkdirSync(WORK_DIR, { recursive: true })
+  try { fs.chmodSync(WORK_DIR, 0o700) } catch {}
   void tick()
   const timer = setInterval(() => { void tick() }, CHECK_MS)
 

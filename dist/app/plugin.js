@@ -13,6 +13,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { json } from '../lib/http.js';
+import { redact } from '../lib/redact.js';
 import { probeModel } from '../lib/model-ready.js';
 import { CFG_FILE } from '../config/paths.js';
 import { startPulse } from '../features/bili-pulse/feature.js';
@@ -84,7 +85,7 @@ export default {
                     }
                     catch (err) {
                         try {
-                            json(res, 500, { ok: false, error: String(err instanceof Error ? err.message : err) });
+                            json(res, 500, { ok: false, error: redact(err instanceof Error ? err.message : err) });
                         }
                         catch { }
                     }

@@ -34,7 +34,7 @@ type SectionConfig = {
   self?: { mid?: string; name?: string }
   [k: string]: unknown
 }
-interface CredState { present: boolean; hasSess: boolean; hasJct: boolean; hasBuvid: boolean }
+interface CredState { present: boolean; hasSess: boolean; hasJct: boolean; hasBuvid: boolean; fingerprint?: string }
 interface QrSession { key: string; img: string; status: string }
 interface PlanSummary { pending: number; nextDueText: string | null; nextWhenText: string | null }
 interface PulseStatus { ok: boolean; everyMin: number; beats: number; lastBeatText: string | null; plan: PlanSummary }
@@ -208,7 +208,7 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
           "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
         pulseLine ? h("div", { className: "bll-hint" }, "💓 " + pulseLine) : null,
         cred ? h("div", { className: "bll-hint" }, cred.present
-          ? `当前账号：${cfg.self?.name || "?"}（mid ${cfg.self?.mid || "?"}）${cred.hasSess && cred.hasJct ? " ✓" : " ⚠️ 凭据缺字段"}`
+          ? `当前账号：${cfg.self?.name || "?"}（mid ${cfg.self?.mid || "?"}）${cred.hasSess && cred.hasJct ? " ✓" : " ⚠️ 凭据缺字段"}${cred.fingerprint ? ` · 凭据指纹 ${cred.fingerprint}` : ""}`
           : "还没写入凭据 —— 在下面粘贴一次 cookie") : null,
 
         ...groups.map((g) => h("div", { key: g },

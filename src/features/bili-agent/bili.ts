@@ -34,6 +34,7 @@
 // 从不 import 它的代码。跑法：bun 直接吃 TypeScript，不需要先编译 ✓
 // ============================================================================
 import { pathToFileURL } from 'node:url'
+import { redact } from '../../lib/redact.ts'
 import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
 
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
@@ -53,6 +54,17 @@ const [cmd, ...rest] = process.argv.slice(2)
 const invokedDirectly = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
 if (invokedDirectly) {
   const { flags, positional } = parseArgs(rest)
+  // 终端出口统一脱敏：命令实现里直接 console.*，入口这层兜住 —— 任何夹带的 cookie / csrf 都打成 ***，
+  // 且只在直接运行时生效（被 import 时不改全局 console，保持「只是库」）。
+  const rawLog = console.log.bind(console)
+  const rawErr = console.error.bind(console)
+  const clean = (a: unknown): unknown => {
+    if (typeof a === 'string') return redact(a)
+    if (a instanceof Error) return new Error(redact(a.message))
+    return a
+  }
+  console.log = (...args: unknown[]) => rawLog(...args.map(clean))
+  console.error = (...args: unknown[]) => rawErr(...args.map(clean))
   try {
     if (cmd === 'selftest') await cmdSelftest(flags.has('json'))
     else if (cmd === 'login') await cmdLogin()
