@@ -103,12 +103,29 @@ type DraftTool = Omit<ToolDefinitionLike, 'output'> & {
   render: (args: unknown, value: unknown) => ContentBlockLike[]
 }
 
+/**
+ * 工具返回值必须是「无损 JSON」：undefined 不是 JSON 值，宿主会判整次调用失败。
+ * ops 层大量用 undefined 表示「没有」（可选字段 / 条件分支），所以在工具边界统一剔除，
+ * 而不是让 10 个 execute 各记一遍 —— 漏一个就是一次假失败（写入其实已经成功）。
+ */
+function stripUndefined(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripUndefined)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, v] of Object.entries(value)) {
+      if (v !== undefined) out[key] = stripUndefined(v)
+    }
+    return out
+  }
+  return value
+}
+
 const toDefinition = (d: DraftTool): ToolDefinitionLike => ({
   name: d.name,
   description: d.description,
   parameters: d.parameters,
   output: { schema: d.schema, render: d.render },
-  execute: d.execute,
+  execute: async (args, exec) => stripUndefined(await d.execute(args, exec)),
 })
 
 export function buildTools(): ToolDefinitionLike[] { return drafts().map(toDefinition) }
@@ -450,6 +467,7 @@ function drafts(): DraftTool[] {
         }, ['bvid', 'title', 'aid']),
         plan: obj({
           url: { type: 'string' },
+          method: oneOf('HTTP 方法', ['POST']),
           referer: { type: 'string' },
           form: { type: 'object' },
           account: { type: 'string' },
@@ -457,7 +475,7 @@ function drafts(): DraftTool[] {
           usedToday: { type: 'number' },
           limit: { type: 'number' },
           remainingAfter: { type: 'number' },
-        }, ['url', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
+        }, ['url', 'method', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
         rpid: { type: 'number' },
         usedToday: { type: 'number' },
         limit: { type: 'number' },
@@ -511,16 +529,19 @@ function drafts(): DraftTool[] {
         }, ['kind']),
         plan: obj({
           url: { type: 'string' },
+          method: oneOf('HTTP 方法', ['POST']),
           referer: { type: 'string' },
           form: { type: 'object' },
+          account: { type: 'string' },
           counted: { type: 'boolean' },
           usedToday: { type: 'number' },
           limit: { type: 'number' },
           remainingAfter: { type: 'number' },
-        }, ['url', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
+        }, ['url', 'method', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
         counted: { type: 'boolean' },
         usedToday: { type: 'number' },
         limit: { type: 'number' },
+        account: obj({ name: { type: 'string' }, mid: { type: 'string' } }, ['name', 'mid']),
       }, ['kind', 'object']),
       async execute(args) {
         const a = (args ?? {}) as Record<string, unknown>

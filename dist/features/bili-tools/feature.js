@@ -83,12 +83,30 @@ const dur = (sec) => {
     const m = Math.floor(sec / 60);
     return `${String(m).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 };
+/**
+ * 工具返回值必须是「无损 JSON」：undefined 不是 JSON 值，宿主会判整次调用失败。
+ * ops 层大量用 undefined 表示「没有」（可选字段 / 条件分支），所以在工具边界统一剔除，
+ * 而不是让 10 个 execute 各记一遍 —— 漏一个就是一次假失败（写入其实已经成功）。
+ */
+function stripUndefined(value) {
+    if (Array.isArray(value))
+        return value.map(stripUndefined);
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [key, v] of Object.entries(value)) {
+            if (v !== undefined)
+                out[key] = stripUndefined(v);
+        }
+        return out;
+    }
+    return value;
+}
 const toDefinition = (d) => ({
     name: d.name,
     description: d.description,
     parameters: d.parameters,
     output: { schema: d.schema, render: d.render },
-    execute: d.execute,
+    execute: async (args, exec) => stripUndefined(await d.execute(args, exec)),
 });
 export function buildTools() { return drafts().map(toDefinition); }
 function drafts() {
@@ -454,6 +472,7 @@ function drafts() {
                 }, ['bvid', 'title', 'aid']),
                 plan: obj({
                     url: { type: 'string' },
+                    method: oneOf('HTTP 方法', ['POST']),
                     referer: { type: 'string' },
                     form: { type: 'object' },
                     account: { type: 'string' },
@@ -461,7 +480,7 @@ function drafts() {
                     usedToday: { type: 'number' },
                     limit: { type: 'number' },
                     remainingAfter: { type: 'number' },
-                }, ['url', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
+                }, ['url', 'method', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
                 rpid: { type: 'number' },
                 usedToday: { type: 'number' },
                 limit: { type: 'number' },
@@ -517,16 +536,19 @@ function drafts() {
                 }, ['kind']),
                 plan: obj({
                     url: { type: 'string' },
+                    method: oneOf('HTTP 方法', ['POST']),
                     referer: { type: 'string' },
                     form: { type: 'object' },
+                    account: { type: 'string' },
                     counted: { type: 'boolean' },
                     usedToday: { type: 'number' },
                     limit: { type: 'number' },
                     remainingAfter: { type: 'number' },
-                }, ['url', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
+                }, ['url', 'method', 'referer', 'form', 'counted', 'usedToday', 'limit', 'remainingAfter']),
                 counted: { type: 'boolean' },
                 usedToday: { type: 'number' },
                 limit: { type: 'number' },
+                account: obj({ name: { type: 'string' }, mid: { type: 'string' } }, ['name', 'mid']),
             }, ['kind', 'object']),
             async execute(args) {
                 const a = (args ?? {});
