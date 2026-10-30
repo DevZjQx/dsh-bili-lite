@@ -18,6 +18,7 @@ import { probeModel } from '../lib/model-ready.js';
 import { CFG_FILE } from '../config/paths.js';
 import { startPulse } from '../features/bili-pulse/feature.js';
 import { registerSettings } from '../features/settings/feature.js';
+import { registerBiliTools } from '../features/bili-tools/feature.js';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = path.join(HERE, '..', 'features', 'bili-agent', 'bili.js');
 export default {
@@ -92,6 +93,31 @@ export default {
                 },
             }));
         }
+        // ── 工具：bili_* 那 10 个（宿主没装 dsh-tools 就静默跳过，设置页与心跳照常）──
+        // 不写进 inject：工具是增强，缺了不该让整个插件（含设置页 / 心跳）起不来。
+        // 先注册再起心跳 —— 心跳文案要按「工具到底可不可用」切换口径，不猜。
+        const tools = (() => {
+            try {
+                return ctx.get('tools') ?? ctx.tools;
+            }
+            catch {
+                return ctx.get('tools');
+            }
+        })();
+        let toolsReady = false;
+        if (tools && typeof tools.register === 'function') {
+            try {
+                disposers.push(registerBiliTools(tools));
+                toolsReady = true;
+                console.log('[bili-lite] 已注册 10 个 bili_* 工具');
+            }
+            catch (e) {
+                console.warn('[bili-lite] 工具注册失败：' + (e instanceof Error ? e.message : String(e)));
+            }
+        }
+        else {
+            console.warn('[bili-lite] 宿主没有 tools 服务：bili_* 工具不可用（CLI 与设置页仍可用）');
+        }
         // ── 心跳：先起（/api/status 由它自己注册；起不来 → 这里兜底一条「未启动」）──
         // probeReady：没有 API 凭证 / 没有可用模型时不投拍 —— 否则每拍都会以
         // MISSING_CREDENTIAL 失败。探针只读 llm 目录（listModels 本身是凭证门控的）。
@@ -101,6 +127,7 @@ export default {
                 getSession: sessionController,
                 route,
                 cliPath: CLI_PATH,
+                toolsReady,
                 probeReady: async () => {
                     const readiness = await probeModel((name) => ctx.get(name));
                     return readiness.ok ? undefined : readiness.reason;

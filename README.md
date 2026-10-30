@@ -204,7 +204,8 @@ src/
 └── features/
     ├── settings/                # 设置壳：宿主 API + 浏览器 section（docs/features/settings.md）
     ├── bili-pulse/              # 心跳：照它排的作息投拍，没排作息时兜底问一拍（docs/features/bili-pulse.md）
-    └── bili-agent/              # agent CLI：看/评/账本（docs/features/bili-agent.md）
+    ├── bili-agent/              # 数据面 ops + agent CLI：看/评/账本（docs/features/bili-agent.md）
+    └── bili-tools/              # 模型可调用的 bili_* 工具：schema + 人话（docs/features/bili-tools.md）
 ```
 
 - 每个 feature 一个入口：`feature.ts`（CLI 按框架约定是 `bili.ts`）；`settings/client.ts` 是单文件加载的浏览器半边（零 import）。

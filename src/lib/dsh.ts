@@ -58,11 +58,46 @@ export interface AgentDefaultModelLike {
   currentSelection(): ModelSelectionLike | undefined
 }
 
+// ── 工具（裸 JSON Schema 注册）────────────────────────────────────────────
+// 不 import @deepseek-ai/dsh-tools：那个包只随宿主分发，插件不能假设它可解析。
+// 代价是参数校验得自己来（DSH 对裸注册的工具不做输入校验），参数 schema 也必须
+// 直接写成 JSON Schema 而不是它的 ParameterSchemaSpec 简写。
+// 真身见 packages/core/tools/src/contracts.ts 的 ToolDefinition / ToolRunContext。
+
+export interface ContentBlockLike { type: 'text'; text: string }
+
+export interface ToolRunContextLike {
+  /** 调用方取消信号：长任务（抽帧）必须转发 */
+  signal?: AbortSignal
+  /** 发起这次调用的 Agent（宿主只保证 id = 会话 id） */
+  agent?: { id?: string }
+}
+
+/** 裸工具定义（ToolDefinition 的最小可用子集；output 必填） */
+export interface ToolDefinitionLike {
+  name: string
+  description: string
+  /** 模型可见的参数 schema：{ type:'object', properties, required, additionalProperties:false } */
+  parameters: Record<string, unknown>
+  output: {
+    schema: Record<string, unknown>
+    /** 纯函数：把规范化值变成模型看的话（UI 卡片另说，这里不管） */
+    render: (args: unknown, value: unknown) => ContentBlockLike[]
+  }
+  execute: (args: unknown, exec: ToolRunContextLike) => Promise<unknown>
+}
+
+export interface ToolsLike {
+  register(definition: ToolDefinitionLike): () => void
+}
+
 /** app 拿到的插件上下文（DSH 只保证这几个能力） */
 export interface PluginContext {
   get<T = unknown>(name: string): T | undefined
   connection?: ConnectionLike
   webServer: WebServerLike
   sessionController?: SessionControllerLike
+  /** 宿主没装 dsh-tools 时没有这个服务（工具那半边就静默不可用） */
+  tools?: ToolsLike
   effect(fn: () => undefined | (() => void)): void
 }
