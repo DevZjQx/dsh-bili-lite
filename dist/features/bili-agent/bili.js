@@ -40,6 +40,9 @@
 import { pathToFileURL } from 'node:url';
 import { redact } from '../../lib/redact.js';
 import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdUp, cmdFollowing, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.js';
+import { BiliError } from './ops.js';
+/** ops 的失败码 → 退出码。退出码是 CLI 的方言（脚本 / agent 靠它分支），ops 不关心 */
+const EXIT = { usage: 2, credential: 3, guard: 3, auth: 4, notfound: 4, upstream: 5, unsupported: 6 };
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
 function parseArgs(rest) {
     const flags = new Map();
@@ -107,6 +110,8 @@ if (invokedDirectly) {
     }
     catch (e) {
         console.error(`✗ ${e instanceof Error ? e.message : String(e)}`);
-        process.exit(1);
+        if (e instanceof BiliError && e.hint)
+            console.error(`  ${e.hint}`);
+        process.exit(e instanceof BiliError ? EXIT[e.code] : 1);
     }
 }

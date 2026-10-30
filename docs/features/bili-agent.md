@@ -8,10 +8,10 @@
 
 **Depends on.** `config/paths`、`config/store`、`lib/bilibili`、`lib/qrcode`、`lib/json-file`、`lib/schedule`（计划的唯一真相，与 `bili-pulse` 共用）、`lib/ffmpeg`（可选依赖：只有 `shots` 用得到，缺了不影响其余子命令）。
 
-**Public surface.** `bili.ts` —— 可执行入口（`bun …/bili.ts <子命令>`；插件 spawn 的是编译后的 dist 版本）。宿主只引用路径（spawn 自检、心跳文案点名），从不 import 它。
+**Public surface.** 两个入口，一个 feature：`bili.ts` —— 可执行入口（`bun …/bili.ts <子命令>`；插件 spawn 的是编译后的 dist 版本），宿主只引用路径（spawn 自检、心跳文案点名），从不 import 它；`feature.ts` —— 纯库入口，只 re-export `ops.ts` 的数据契约（`BiliError` 与各 op 的入参 / 返回值），零副作用，供 `bili-tools` 这类跨 feature 调用走（结构检查只放行跨 feature 的 `feature.ts`）。`ops.ts` 是唯一的数据面：不打印、不退出、不格式化，副作用（记账 / 已读 / 计划落盘）全留在这一层，好让 CLI 与工具拿到同一份结果。十个 op：`feed` / `up` / `following` / `video` / `shots` / `inbox` / `history` / `schedule` / `comment` / `interact`；失败一律抛 `BiliError`，`code` 取 `usage`(2) / `credential`(3) / `guard`(3) / `auth`(4) / `notfound`(4) / `upstream`(5) / `unsupported`(6)（括号里是 CLI 退出码，映射在 `bili.ts`）。CLI 侧只剩「解析 flags + 排版」。
 
 **Owner.** 暂无专人（app owner 代管）。
 
 **Rejected.** 把每个子命令拆一个文件 —— 代码总量千行上下，commands.ts + ledger.ts 已经够清楚。把额度/判重做成可配置关闭 —— 拒绝：克制是功能，不是开关。为抽帧引 npm 的 JPEG 解码器或随包分发 ffmpeg —— 拒绝：lite 不背二进制和依赖树；改为「用得上的人自己装 ffmpeg，装不上就少画面这一路」。把整段视频下载下来再抽 —— 拒绝：直接对直链按时间点 seek，抽完即删，磁盘不随视频长度涨。
 
-**Exceptions.** 入口文件名是 `bili.ts` 而不是 `feature.ts`：CLI 的「框架约定」是可执行文件名（对 agent 与 README 的命令行保持可读）。结构检查脚本把「带 shebang 的根级 .ts」认作合法入口，详见文件头注释。
+**Exceptions.** 入口文件名是 `bili.ts` 而不是 `feature.ts`：CLI 的「框架约定」是可执行文件名（对 agent 与 README 的命令行保持可读）。结构检查脚本把「带 shebang 的根级 .ts」认作合法入口，详见文件头注释。同时保留 `feature.ts` 作为纯库入口（零 import、零副作用），是为了让 `bili-tools` 能按结构规则引用 ops —— 两个入口指向同一份实现，不是两套。ops 层唯一的格式化例外是 `ScheduleEntryView.whenText`：那段中文的规则在 `lib/schedule` 的 `fmtWhen`（与 `bili-pulse` 共用的唯一真相），搬到渲染层会变两份。

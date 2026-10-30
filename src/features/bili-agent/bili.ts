@@ -40,6 +40,11 @@
 import { pathToFileURL } from 'node:url'
 import { redact } from '../../lib/redact.ts'
 import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdUp, cmdFollowing, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
+import { BiliError } from './ops.ts'
+import type { OpsErrorCode } from './ops.ts'
+
+/** ops 的失败码 → 退出码。退出码是 CLI 的方言（脚本 / agent 靠它分支），ops 不关心 */
+const EXIT: Record<OpsErrorCode, number> = { usage: 2, credential: 3, guard: 3, auth: 4, notfound: 4, upstream: 5, unsupported: 6 }
 
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
 function parseArgs(rest: string[]): { flags: Map<string, string | true>; positional: string[] } {
@@ -87,6 +92,7 @@ if (invokedDirectly) {
     else { console.log(HELP); process.exit(cmd ? 2 : 0) }
   } catch (e) {
     console.error(`✗ ${e instanceof Error ? e.message : String(e)}`)
-    process.exit(1)
+    if (e instanceof BiliError && e.hint) console.error(`  ${e.hint}`)
+    process.exit(e instanceof BiliError ? EXIT[e.code] : 1)
   }
 }

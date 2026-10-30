@@ -41,6 +41,13 @@ export function saveCred(cred) {
     }
     catch { }
 }
+/** 视频详情（view）：标题 / UP / 时长 / 统计 / 分P —— 24 小时缓存，同一条反复看不重复打接口 */
+export async function getView(bvid, cred) {
+    const j = await apiGet(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { cred, ttlMs: 24 * 3600_000 });
+    if (j.code !== 0)
+        throw new Error(`查不到视频 ${bvid}：${explainCode(j.code)}${j.message ? '（' + j.message + '）' : ''}`);
+    return j.data ?? {};
+}
 /** 真的去 nav 验证一次登录态，返回 { mid, name }（写凭据前后都该走这里，不做离线格式检查） */
 export async function whoami(cred) {
     const nav = await apiGet('https://api.bilibili.com/x/web-interface/nav', { cred });
