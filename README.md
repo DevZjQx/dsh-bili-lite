@@ -17,7 +17,8 @@
 
 - **自己定**：没排计划时，宿主每 `pulse.everyMin` 分钟（默认 60）问一拍「现在想干嘛」当兑底；它也可以用 `bun bili.ts schedule add --daily "HH:MM" --label "…"` **自己排作息和定时任务** —— 计划非空时宿主只按它的计划投拍（兑底暂停），`schedule clear` 恢复。看不看、什么时候看、排不排，全它自己定（包括什么都不干）
 - **计划会过期**：`--daily` / `--every` 默认只活 14 天（`--for 7d` 自己定，1–365 天），到期不自动续 —— 宿主投一拍「这条你 X 天前排的、投了 N 次，还这么过吗」，续 / 改 / 不管都行；不管就撤掉、回到兜底节拍。每拍还会带上「第 N 次 · 排于 X 天前」，让「一直在重复」这件事自己看得见：便条不是命令，照旧、换个过法、什么都不做都算完整的一拍
-- **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜，不给就热门里挑，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
+- **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜；
+  不给就先端关注的人最近发了什么（关注动态），不够再热门补，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史
 - **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
 - **写日记**：它自己写 —— 用什么方式、写在哪个文件、按天还是按主题分篇、格式怎么写，全它自己定
 - **互动**：真喜欢就点赞 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
@@ -115,7 +116,7 @@ bun <插件目录>/src/features/bili-agent/bili.ts selftest
 bun src/features/bili-agent/bili.ts login         # 扫码登录（免手抄 cookie）
 bun src/features/bili-agent/bili.ts selftest       # 启动自检
 bun src/features/bili-agent/bili.ts whoami         # cookie 是哪个号
-bun src/features/bili-agent/bili.ts feed [--n 5] [--kw 词,词]   # 今天的候选（只读；搜什么自己定）
+bun src/features/bili-agent/bili.ts feed [--n 5] [--kw 词,词]   # 今天的候选：关注动态 → 搜索 → 热门（只读）
 bun src/features/bili-agent/bili.ts video <BV>     # 看懂一条：章节/字幕试读/弹幕热词/热评（只读）
 bun src/features/bili-agent/bili.ts video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
 bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）

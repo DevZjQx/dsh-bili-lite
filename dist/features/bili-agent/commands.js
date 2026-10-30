@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config, writeConfig, DEFAULTS } from '../../config/store.js';
 import { CFG_FILE, CRED_FILE, DATA_DIR, INBOX_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js';
-import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl, getMsgFeed, getThreadReplies } from '../../lib/bilibili.js';
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl, getFollowingFeed, getMsgFeed, getThreadReplies } from '../../lib/bilibili.js';
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
 import { writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js';
@@ -49,7 +49,7 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   selftest                启动自检（装完先跑这个）
   login                   扫码登录（手机 B 站 App 扫码，免手抄 cookie）
   whoami                  cookie 是哪个号
-  feed [--n 5] [--kw 词,词]  今天的候选（只读；--kw 由你自己定，不给就热门）
+  feed [--n 5] [--kw 词,词]  今天的候选（关注动态 + 搜索 + 热门；只读；--kw 由你自己定）
   video <BV> [--read 全文|mm:ss-mm:ss]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
@@ -216,8 +216,8 @@ export async function cmdWhoami() {
 }
 export async function cmdFeed(flags) {
     const n = Math.min(10, Math.max(1, Number(flags.get('n') ?? 5)));
-    // 口味不存配置：想搜什么由它此刻自己定（--kw，逗号分隔，最多 3 个）；不给就只拿热门当候选，
-    // 喜不喜欢全在它自己脑子里 —— 看标题挑，不用谁预先告诉它「爱看 / 不爱看」什么。
+    // 口味不存配置：想搜什么由它此刻自己定（--kw，逗号分隔，最多 3 个）；不给就先端关注动态、
+    // 不够再热门补。喜不喜欢全在它自己脑子里 —— 看标题挑，不用谁预先告诉它「爱看 / 不爱看」什么。
     const keywords = String(flags.get('kw') ?? '').split(/[,，、;；]+/).map((s) => s.trim()).filter(Boolean).slice(0, 3);
     const cred = loadCred();
     const seen = seenSet();
@@ -241,7 +241,34 @@ export async function cmdFeed(flags) {
         if (pool.length >= n * 3)
             break;
     }
-    // ② 不够就用热门补
+    // ② 关注动态：它关注的人最近发了什么（关注是它自己做的决定，这里只把结果端上来）
+    if (pool.length < n) {
+        // 这条接口要 buvid3：缺了必被 -352 拦，还会误触熔断 —— 干脆跳过，别为了一个来源把整轮停掉
+        if (!cred.buvid3) {
+            console.log('（关注动态跳过：cookie 里没有 buvid3 —— 去设置页重抄一次 cookie；这轮先靠搜索 / 热门）');
+        }
+        else {
+            const before = pool.length;
+            try {
+                const items = await getFollowingFeed(cred);
+                for (const it of items) {
+                    const a = it.modules?.module_dynamic?.major?.archive;
+                    if (!a?.bvid)
+                        continue;
+                    push({
+                        bvid: a.bvid, title: a.title, up: it.modules?.module_author?.name,
+                        play: a.stat?.play, duration: a.duration_text, why: '关注动态',
+                    });
+                }
+                if (pool.length === before)
+                    console.log('（关注动态里没有没看过的投稿 —— 关注的人还没更新，或这个号还没关注谁）');
+            }
+            catch (e) {
+                console.log(`（关注动态失败：${errMsg(e)}）`);
+            }
+        }
+    }
+    // ③ 不够就用热门补
     if (pool.length < n) {
         try {
             const j = await apiGet('https://api.bilibili.com/x/web-interface/popular?pn=1&ps=20', { cred });
@@ -252,7 +279,7 @@ export async function cmdFeed(flags) {
             console.log(`（热门列表失败：${errMsg(e)}）`);
         }
     }
-    // ③ 只排除看过的；不预先排除任何题材 —— 要不要看它自己判断
+    // ④ 只排除看过的；不预先排除任何题材 —— 要不要看它自己判断
     const picks = pool.slice(0, n);
     if (!picks.length) {
         console.log('（没有捞到候选 —— 换几个 --kw 关键词，或稍后再试）');
@@ -627,7 +654,7 @@ export async function cmdComment(flags, positional) {
         console.error('分享已在设置里关闭（share.enabled=false）→ 这次不发（看视频/写日记照常 ✓）');
         process.exit(3);
     }
-    const limit = Math.max(0, Number(cfg.quota?.writeDaily ?? 3));
+    const limit = Math.max(0, Number(cfg.quota?.writeDaily ?? DEFAULTS.quota.writeDaily));
     const wrote = writesToday();
     if (wrote.length >= limit) {
         console.error(`✗ 今天的写额度用完了（${wrote.length}/${limit}）。明天再说 —— 克制是功能，不是 bug ✓`);
@@ -931,7 +958,7 @@ export function cmdTaste(flags) {
 }
 export function cmdLedger() {
     const led = readLedger();
-    const limit = Math.max(0, Number(config().quota?.writeDaily ?? 3));
+    const limit = Math.max(0, Number(config().quota?.writeDaily ?? DEFAULTS.quota.writeDaily));
     const wrote = writesToday();
     console.log(`今天（${today()}）：已写 ${wrote.length}/${limit} 条`);
     for (const x of wrote)

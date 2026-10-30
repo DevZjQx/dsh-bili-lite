@@ -1,6 +1,6 @@
 # bili-agent（agent 的手和眼）
 
-**Purpose.** agent（和人）操作 B 站的唯一 CLI：自检、扫码登录、看候选（口味不存配置，搜索词由 agent 当场用 `--kw` 自己给）、读视频（字幕/弹幕/热评 + 抽帧九宫格看画面）、发评论 / 回评论、看收件箱（谁 @ 了你 / 谁回了你）、点赞 / 关注（写操作）、额度账本、自己排作息 / 定时任务（schedule）。写日记不归这个 CLI 管 —— 它自己写（见 Does not own）。
+**Purpose.** agent（和人）操作 B 站的唯一 CLI：自检、扫码登录、看候选（关注动态 → 搜索 → 热门；口味不存配置，搜索词由 agent 当场用 `--kw` 自己给）、读视频（字幕/弹幕/热评 + 抽帧九宫格看画面）、发评论 / 回评论、看收件箱（谁 @ 了你 / 谁回了你）、点赞 / 关注（写操作）、额度账本、自己排作息 / 定时任务（schedule）。写日记不归这个 CLI 管 —— 它自己写（见 Does not own）。
 
 **Owns.** 全部子命令（selftest / login / whoami / feed / video / shots / comment / inbox / interact / ledger / taste / schedule）的实现与终端输出；`taste` 的口味回顾（只读账本：看过的标题、常看的 UP、动过手的目标，不替它下结论、不存偏好）；`shots` 的取帧策略（等间隔取中点、格子尺寸跟视频比例、按行列拼图）与产物落点（`~/.dsh/bili-lite-work/shots/`）；**收件箱**（`inbox`：拉 `/x/msgfeed/reply` 与 `/at`，把通知归一成「谁 + 说了什么 + BV + 该挂到哪条评论下」，翻过的记进 `inbox.json`；「回复我的」不直接给对方的 rpid，靠回读楼层认，「认不出就不给可复制的命令」）；账本 `~/.dsh/bili-lite-work/ledger.json`（写额度 / 7 天判重 / 「看过」的唯一真相；发新评论按 BV 判重、回评论按 rpid 判重）；计划的写入入口（经 `lib/schedule` 落盘到 `~/.dsh/bili-lite-work/schedule.json` —— 它是计划的唯一作者，宿主只照投）。互动的判断也在这里：一天 ≤ `quota.interactDaily` 次、同目标同动作 7 天一次（判重看最后一条记录：取消类不占额度、不判重，取消后可以再做）、不能关注自己；安全约定写死在代码里：写操作必须显式 `--dry|--go`、评论正文带 @ 直接拒绝、超 500 字拒绝；计划防滥用上限同样写死（在排 ≤30 条、`--every` 最短 5 分钟、`--daily` / `--every` 保质期 1–365 天默认 14 天 —— 到期不自动续，宿主投一拍复查，投完撤掉；`--at` 一次性不需要保质期，给 `--for` 直接拒绝）。`login` 扫码成功后凭据落盘走 `lib/bilibili` 的 `saveCred`（0600，不回显），并用 `whoami` 真实验证后才报成功。
 

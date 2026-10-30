@@ -344,6 +344,36 @@ export async function wbi(params: Record<string, string | number>, cred: Cred): 
   return `${q}&w_rid=${crypto.createHash('md5').update(q + mixin).digest('hex')}`
 }
 
+// ── 关注动态（关注的人最近发了什么）—— 只读 ──────────────────────────────
+// 关注是 agent 自己做的决定（interact --follow），这条把「自己关注的人的新投稿」端回来；
+// 只认 major 里有 archive 的条目（投稿 / 转发投稿），其余动态类型直接丢掉。
+
+export interface DynamicArchive {
+  bvid?: string
+  title?: string
+  duration_text?: string
+  stat?: { play?: number | string; danmaku?: number | string }
+}
+export interface DynamicItem {
+  type?: string
+  modules?: {
+    module_author?: { mid?: number | string; name?: string; pub_ts?: number }
+    module_dynamic?: { major?: { archive?: DynamicArchive } }
+  }
+}
+export interface DynamicFeed { items?: DynamicItem[]; offset?: string; has_more?: boolean }
+
+/** 关注动态第一页（type=video 只要投稿类）。实测：带 buvid3 的凭据才稳，
+ *  缺了容易被 -352 拦 —— 失败由调用方降级，不当致命错误 */
+export async function getFollowingFeed(cred: Cred): Promise<DynamicItem[]> {
+  const j = await apiGet<ApiEnvelope<DynamicFeed>>(
+    'https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all?type=video&page=1',
+    { cred, referer: 'https://t.bilibili.com/' },
+  )
+  if (Number(j.code) !== 0) throw new Error(`关注动态：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+  return j.data?.items ?? []
+}
+
 // ── 视频内容（字幕 / 弹幕）—— 只读；读多深由 agent 自己定，工具不截断 ──────
 
 /** player v2（要 WBI 签名）：章节 view_points + 字幕列表。
