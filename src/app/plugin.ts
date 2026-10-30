@@ -87,7 +87,7 @@ export default {
     // 不写进 inject：工具是增强，缺了不该让整个插件（含设置页 / 心跳）起不来。
     // 先注册再起心跳 —— 心跳文案要按「工具到底可不可用」切换口径，不猜。
     const tools = ((): ToolsLike | undefined => {
-      try { return ctx.get<ToolsLike>('tools') ?? ctx.tools } catch { return ctx.get<ToolsLike>('tools') }
+      try { return ctx.get<ToolsLike>('tools') ?? ctx.tools } catch { return ctx.tools }
     })()
     let toolsReady = false
     if (tools && typeof tools.register === 'function') {

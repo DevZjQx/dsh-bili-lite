@@ -101,7 +101,7 @@ export default {
                 return ctx.get('tools') ?? ctx.tools;
             }
             catch {
-                return ctx.get('tools');
+                return ctx.tools;
             }
         })();
         let toolsReady = false;
