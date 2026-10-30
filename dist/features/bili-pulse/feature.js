@@ -79,6 +79,7 @@ catch { } } }) {
             `  · 今天评论 + 回复额度 ≤${Math.max(0, Number(cfg.quota?.writeDaily ?? DEFAULTS.quota.writeDaily))} 条、互动额度 ≤${Math.max(0, Number(cfg.quota?.interactDaily ?? DEFAULTS.quota.interactDaily))} 次；同一视频 7 天内只发一条新评论、同一条评论 7 天内只回一次；拿不准先${toolsReady ? '跑 bili_history（kind=ledger）' : '跑 ledger'} 对账；`,
             '  · 你和主人共用身份 —— 每条评论都署他的名，说错话由他承担；',
             '  · 不值得就不发 —— 不发也是完整的一天；',
+            '  · 发评论 / 回之前，先翻一眼自己写的日记（或笔记）—— 上次说过什么、在意什么，自己心里有个数，别重复，也别跟自己记下的打架；',
             '  · 撞到验证码 / 风控：立刻停手，把情况记进日记，今天不再发任何请求。',
         ].join('\n');
     }
