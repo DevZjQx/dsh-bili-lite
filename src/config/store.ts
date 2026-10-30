@@ -31,7 +31,7 @@ export const DEFAULTS: Config = {
   persona: { name: '' },
   self: { mid: '', name: '' },
   pulse: { everyMin: 60 },
-  quota: { writeDaily: 3, interactDaily: 10 },
+  quota: { writeDaily: 10, interactDaily: 10 },
   share: { enabled: true },
   risk: { minGapMs: 1200 },
 }

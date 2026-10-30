@@ -23,7 +23,7 @@
 //
 // 安全约定（写死在代码里，不靠自觉）：
 //   · 写操作必须显式 --dry（只打印）或 --go（真的发），拒绝裸跑
-//   · 每天评论 ≤ quota.writeDaily（默认 3）、互动 ≤ quota.interactDaily（默认 10）；
+//   · 每天评论 ≤ quota.writeDaily（默认 10）、互动 ≤ quota.interactDaily（默认 10）；
 //     同一视频 7 天内同一种评论/互动只做一次（取消赞 / 取关不占额度）
 //   · 两次请求至少隔 risk.minGapMs（默认 1200ms）；撞 412/风控码 → 熔断退避（lib/bilibili.ts）
 //   · 凭据只从 ~/.dsh/bili-lite-work/credentials.json 读，永远不回显

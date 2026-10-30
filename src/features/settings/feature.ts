@@ -68,7 +68,6 @@ export function registerSettings({ route, isTrusted, cliPath }: SettingsDeps): v
     writeConfig(cur)   // 心跳每拍都重新读配置 → 保存即生效，无需任何回调 ✓
     json(res, 200, {
       ok: true, config: cur,
-      warn: cur.quota.writeDaily > 3 ? '写额度 >3：看起来会像刷量，平台可能限流/封号' : null,
     })
   })
 

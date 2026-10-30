@@ -61,7 +61,6 @@ export function registerSettings({ route, isTrusted, cliPath }) {
         writeConfig(cur); // 心跳每拍都重新读配置 → 保存即生效，无需任何回调 ✓
         json(res, 200, {
             ok: true, config: cur,
-            warn: cur.quota.writeDaily > 3 ? '写额度 >3：看起来会像刷量，平台可能限流/封号' : null,
         });
     });
     // ── 凭据写入：先验证（真的去 nav 请求一次），通过才落盘；失败不动旧凭据 ──
