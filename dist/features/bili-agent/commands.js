@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { config, writeConfig, DEFAULTS } from '../../config/store.js';
 import { CFG_FILE, CRED_FILE, DATA_DIR, INBOX_FILE, SCHEDULE_FILE, SHOTS_DIR } from '../../config/paths.js';
-import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl, getFollowingFeed, getMsgFeed, getThreadReplies } from '../../lib/bilibili.js';
+import { apiGet, apiPost, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, UA, wbi, banUntil, banWhy, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getPlayUrl, getFollowingFeed, getFollowings, getSpaceVideos, searchUsers, getMsgFeed, getThreadReplies } from '../../lib/bilibili.js';
 import { requireFfmpeg, runFfmpeg, ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
 import { writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, seenSet, ledgerAppend, readLedger, today } from './ledger.js';
@@ -50,6 +50,11 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   login                   扫码登录（手机 B 站 App 扫码，免手抄 cookie）
   whoami                  cookie 是哪个号
   feed [--n 5] [--kw 词,词]  今天的候选（关注动态 + 搜索 + 热门；只读；--kw 由你自己定）
+  up <mid|名字|空间链接> [--n 20] [--page 1] [--order pubdate|click|stow]
+                          看某位 UP 的投稿列表（只读）；mid 从 video <BV> 的输出里抄，
+                          也可以直接写 TA 的名字（按名字搜一次人）
+  following [--n 50] [--page 1]
+                          我关注了谁：名单 + mid + 关注时间（只读；最近关注的在前）
   video <BV> [--read 全文|mm:ss-mm:ss]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
@@ -291,6 +296,99 @@ export async function cmdFeed(flags) {
         console.log(`    ${v.up ?? '?'} · 播放 ${fmtNum(v.play)} · ${durText(v.duration)} · ${v.why}`);
     }
     console.log('\n下一步：bun bili.ts video <BV> —— 看懂了再说话 ✓');
+}
+// ── up：某位 UP 的投稿列表（只读）────────────────────────────────────────
+// 用途是「顺着一个喜欢的人往下看」：feed 只端最近动态，这条能把 TA 的历史投稿翻出来。
+// mid 可以从 video <BV> 的输出里抄；不想抄就写名字（先按 bili_user 搜一次人，取第一条）。
+const UP_ORDER = { pubdate: '最新发布', click: '最多播放', stow: '最多收藏' };
+const UP_USAGE = `用法: bun bili.ts up <mid|名字|空间链接> [--n 20] [--page 1] [--order pubdate|click|stow]
+  --n      每页条数（1–50，默认 20）
+  --page   翻到第几页（默认 1）
+  --order  排序：pubdate 最新发布（默认）/ click 最多播放 / stow 最多收藏
+  只读，不占额度、不记账本`;
+export async function cmdUp(flags, positional) {
+    const target = String(positional[0] ?? '').trim();
+    if (!target) {
+        console.error(UP_USAGE);
+        process.exit(2);
+    }
+    const ps = Math.min(50, Math.max(1, Number(flags.get('n') ?? 20) || 20));
+    const pn = Math.min(500, Math.max(1, Number(flags.get('page') ?? 1) || 1));
+    const order = String(flags.get('order') ?? 'pubdate');
+    if (!(order in UP_ORDER)) {
+        console.error(`✗ --order 只认 ${Object.keys(UP_ORDER).join(' / ')}\n\n${UP_USAGE}`);
+        process.exit(2);
+    }
+    const cred = loadCred();
+    // 目标三种写法：纯 mid / 空间链接 / 名字 —— 名字要多花一次搜索（只读，同一套节流）
+    let mid = '';
+    const fromUrl = target.match(/space\.bilibili\.com\/(\d{1,12})/);
+    if (fromUrl)
+        mid = fromUrl[1];
+    else if (/^\d{1,12}$/.test(target))
+        mid = target;
+    else {
+        const hits = (await searchUsers(target, cred)).filter((u) => u.mid);
+        if (!hits.length) {
+            console.error(`✗ 没搜到叫「${target}」的 UP —— 换成完整的名字，或直接在命令里写 mid（video <BV> 的输出里有）`);
+            process.exit(4);
+        }
+        const top = hits[0];
+        mid = String(top.mid);
+        console.log(`按名字匹配到：${top.uname ?? '?'}（mid ${mid}）${top.fans ? ` · 粉丝 ${fmtNum(top.fans)}` : ''}${top.videos ? ` · 投稿 ${top.videos}` : ''}`);
+        const others = hits.slice(1, 5).map((u) => `${u.uname ?? '?'}（mid ${u.mid}）`).join(' / ');
+        if (others)
+            console.log(`  不是这位就直接写 mid：${others}`);
+    }
+    const res = await getSpaceVideos(mid, cred, { pn, ps, order });
+    const who = res.name ? `${res.name}（mid ${mid}）` : `mid ${mid}`;
+    const pages = Math.max(1, Math.ceil(res.total / ps));
+    console.log(`\n=== ${who} · 投稿 ${fmtNum(res.total)} 条 · 第 ${pn}/${pages} 页 · ${UP_ORDER[order]} ===`);
+    if (!res.list.length) {
+        console.log('（这一页没有投稿 —— 换个 --page，或 TA 的稿子已经不在了 / 只发动态）');
+        return;
+    }
+    for (const [i, v] of res.list.entries()) {
+        const when = v.created ? new Date(Number(v.created) * 1000).toLocaleDateString('sv-SE') : '?';
+        console.log(`\n[${(pn - 1) * ps + i + 1}] ${v.bvid ?? '?'} —— ${String(v.title ?? '').replace(/<[^>]+>/g, '')}`);
+        console.log(`    播放 ${fmtNum(v.play)} · 弹幕 ${fmtNum(v.video_review)} · ${durText(v.length)} · ${when}`);
+    }
+    if (pn < pages)
+        console.log(`\n下一页：bun bili.ts up ${mid} --page ${pn + 1}${ps === 20 ? '' : ` --n ${ps}`}`);
+    console.log('看上哪条：bun bili.ts video <BV> —— 看懂了再说话 ✓');
+}
+// ── following：我关注了谁（只读）─────────────────────────────────────────
+// 和 feed 的「关注动态」分工：动态只说谁最近发了什么（长期不更的看不见），
+// 这条才是名单本身 —— 名字后面的 mid 可以直接抄给 up 往下翻它的投稿。
+export async function cmdFollowing(flags) {
+    const ps = Math.min(50, Math.max(1, Number(flags.get('n') ?? 50) || 50));
+    const pn = Math.min(500, Math.max(1, Number(flags.get('page') ?? 1) || 1));
+    const cred = loadCred();
+    // vmid 只能是自己：现查一次 nav（配置里的 self 是登录那一刻的快照，换过号就指错人）
+    const self = await whoami(cred);
+    const res = await getFollowings(self.mid, cred, { pn, ps });
+    const pages = Math.max(1, Math.ceil(res.total / ps));
+    // 页码越界单独说清楚：不然会打印出「第 2/1 页」这种对不上的标题
+    if (res.total > 0 && pn > pages) {
+        console.log(`（关注 ${fmtNum(res.total)} 位，一共 ${pages} 页 —— 没有第 ${pn} 页；--page 1 看起）`);
+        return;
+    }
+    console.log(`\n=== ${self.name}（mid ${self.mid}）关注 ${fmtNum(res.total)} 位 · 第 ${pn}/${pages} 页（最近关注的在前）===`);
+    if (!res.list.length) {
+        console.log('（还没关注谁 —— interact <BV|UID> --follow 关注一个，之后这里就有名单了）');
+        return;
+    }
+    for (const [i, u] of res.list.entries()) {
+        const when = u.mtime ? new Date(Number(u.mtime) * 1000).toLocaleDateString('sv-SE') : '时间未知';
+        const badge = String(u.official?.title ?? '').trim() || (Number(u.vip?.vipStatus) === 1 ? '大会员' : '');
+        console.log(`\n[${(pn - 1) * ps + i + 1}] ${u.uname ?? '?'}（mid ${u.mid ?? '?'}）· 关注于 ${when}${badge ? ` · ${badge}` : ''}`);
+        const sign = String(u.sign ?? '').replace(/\s+/g, ' ').trim();
+        if (sign)
+            console.log(`    ${sign.slice(0, 80)}${sign.length > 80 ? '…' : ''}`);
+    }
+    if (pn < pages)
+        console.log(`\n下一页：bun bili.ts following --page ${pn + 1}${ps === 50 ? '' : ` --n ${ps}`}`);
+    console.log('想顺着谁往下看：bun bili.ts up <mid> —— 名单里的 mid 直接抄 ✓');
 }
 export async function cmdVideo(flags, positional) {
     const bvid = String(positional[0] ?? '');

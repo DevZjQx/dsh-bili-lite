@@ -302,6 +302,34 @@ export async function getFollowingFeed(cred) {
         throw new Error(`关注动态：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
     return j.data?.items ?? [];
 }
+/** 关注列表一页（最近关注的在前）：pn 从 1 起，ps 每页条数。
+ *  走和搜索同一条 wbi()（跟网页端一致）：多发的 wts / w_rid 服务端会忽略，
+ *  但少了签名容易被 -352 拦一次、白挨 5 分钟熔断 —— 宁可签 */
+export async function getFollowings(mid, cred, { pn = 1, ps = 50 } = {}) {
+    const qs = await wbi({ vmid: mid, pn, ps, order: 'desc', order_type: 'attention', platform: 'web' }, cred);
+    const j = await apiGet(`https://api.bilibili.com/x/relation/followings?${qs}`, { cred, referer: `https://space.bilibili.com/${mid}/fans/follow` });
+    if (Number(j.code) !== 0)
+        throw new Error(`关注列表：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
+    const list = j.data?.list ?? [];
+    return { total: Number(j.data?.total ?? list.length), list };
+}
+/** 某位 UP 的投稿列表：pn 从 1 起，ps 每页条数，order 默认最新发布 */
+export async function getSpaceVideos(mid, cred, { pn = 1, ps = 20, order = 'pubdate' } = {}) {
+    const qs = await wbi({ mid, pn, ps, order, platform: 'web', web_location: 1550101 }, cred);
+    const j = await apiGet(`https://api.bilibili.com/x/space/wbi/arc/search?${qs}`, { cred, referer: `https://space.bilibili.com/${mid}/video` });
+    if (Number(j.code) !== 0)
+        throw new Error(`UP 投稿：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
+    const list = j.data?.list?.vlist ?? [];
+    return { name: list[0]?.author, total: Number(j.data?.page?.count ?? list.length), list };
+}
+/** 按名字找人（search_type=bili_user）：只用来把「名字」换成 mid，取前几条给调用方挑 */
+export async function searchUsers(keyword, cred) {
+    const qs = await wbi({ search_type: 'bili_user', keyword: keyword.slice(0, 40), page: 1 }, cred);
+    const j = await apiGet(`https://api.bilibili.com/x/web-interface/wbi/search/type?${qs}`, { cred, referer: 'https://search.bilibili.com/' });
+    if (Number(j.code) !== 0)
+        throw new Error(`搜人：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`);
+    return j.data?.result ?? [];
+}
 // ── 视频内容（字幕 / 弹幕）—— 只读；读多深由 agent 自己定，工具不截断 ──────
 /** player v2（要 WBI 签名）：章节 view_points + 字幕列表。
  *  实测：AI 字幕列表要登录态才返回（匿名 subtitles 为空、need_login_subtitle=true） */

@@ -375,6 +375,86 @@ export async function getFollowingFeed(cred: Cred): Promise<DynamicItem[]> {
   return j.data?.items ?? []
 }
 
+// ── 关注列表（我关注了谁）—— 只读 ─────────────────────────────────────────
+// 关注动态（getFollowingFeed）只说「谁最近发了什么」；这条才是名单本身 ——
+// 长期不发稿的、只发图文的也在里面。只认登录号自己的名单（vmid），要看别人的得对方公开。
+
+export interface FollowedUp {
+  mid?: number | string
+  uname?: string
+  sign?: string
+  /** 关注时间（秒） */
+  mtime?: number
+  official?: { title?: string }
+  vip?: { vipStatus?: number }
+}
+export interface Followings { total: number; list: FollowedUp[] }
+
+/** 关注列表一页（最近关注的在前）：pn 从 1 起，ps 每页条数。
+ *  走和搜索同一条 wbi()（跟网页端一致）：多发的 wts / w_rid 服务端会忽略，
+ *  但少了签名容易被 -352 拦一次、白挨 5 分钟熔断 —— 宁可签 */
+export async function getFollowings(
+  mid: string,
+  cred: Cred,
+  { pn = 1, ps = 50 }: { pn?: number; ps?: number } = {},
+): Promise<Followings> {
+  const qs = await wbi({ vmid: mid, pn, ps, order: 'desc', order_type: 'attention', platform: 'web' }, cred)
+  const j = await apiGet<ApiEnvelope<{ list?: FollowedUp[]; total?: number }>>(
+    `https://api.bilibili.com/x/relation/followings?${qs}`,
+    { cred, referer: `https://space.bilibili.com/${mid}/fans/follow` },
+  )
+  if (Number(j.code) !== 0) throw new Error(`关注列表：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+  const list = j.data?.list ?? []
+  return { total: Number(j.data?.total ?? list.length), list }
+}
+
+// ── UP 主投稿（按 mid 看某个人的视频）—— 只读 ────────────────────────────
+// 空间投稿列表要 WBI 签名（跟搜索同一条 wbi），按 mid 拉；不给 mid 就先按名字搜一次人。
+// 匿名访问这条接口大多吃 -352，所以只当「登录后能看」用 —— 失败就照实报，不硬闯。
+
+export interface SpaceVideo {
+  bvid?: string
+  title?: string
+  /** 投稿时间（秒） */
+  created?: number
+  /** 时长 "MM:SS"（接口原样给字符串） */
+  length?: string
+  play?: number | string
+  video_review?: number | string
+  author?: string
+  description?: string
+}
+export interface SpaceVideos { name?: string; total: number; list: SpaceVideo[] }
+
+/** 某位 UP 的投稿列表：pn 从 1 起，ps 每页条数，order 默认最新发布 */
+export async function getSpaceVideos(
+  mid: string,
+  cred: Cred,
+  { pn = 1, ps = 20, order = 'pubdate' }: { pn?: number; ps?: number; order?: 'pubdate' | 'click' | 'stow' } = {},
+): Promise<SpaceVideos> {
+  const qs = await wbi({ mid, pn, ps, order, platform: 'web', web_location: 1550101 }, cred)
+  const j = await apiGet<ApiEnvelope<{ list?: { vlist?: SpaceVideo[] }; page?: { count?: number } }>>(
+    `https://api.bilibili.com/x/space/wbi/arc/search?${qs}`,
+    { cred, referer: `https://space.bilibili.com/${mid}/video` },
+  )
+  if (Number(j.code) !== 0) throw new Error(`UP 投稿：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+  const list = j.data?.list?.vlist ?? []
+  return { name: list[0]?.author, total: Number(j.data?.page?.count ?? list.length), list }
+}
+
+export interface UserHit { mid?: number | string; uname?: string; fans?: number; videos?: number; usign?: string }
+
+/** 按名字找人（search_type=bili_user）：只用来把「名字」换成 mid，取前几条给调用方挑 */
+export async function searchUsers(keyword: string, cred: Cred): Promise<UserHit[]> {
+  const qs = await wbi({ search_type: 'bili_user', keyword: keyword.slice(0, 40), page: 1 }, cred)
+  const j = await apiGet<ApiEnvelope<{ result?: UserHit[] }>>(
+    `https://api.bilibili.com/x/web-interface/wbi/search/type?${qs}`,
+    { cred, referer: 'https://search.bilibili.com/' },
+  )
+  if (Number(j.code) !== 0) throw new Error(`搜人：${explainCode(j.code)}${j.message ? `（${j.message}）` : ''}`)
+  return j.data?.result ?? []
+}
+
 // ── 视频内容（字幕 / 弹幕）—— 只读；读多深由 agent 自己定，工具不截断 ──────
 
 /** player v2（要 WBI 签名）：章节 view_points + 字幕列表。

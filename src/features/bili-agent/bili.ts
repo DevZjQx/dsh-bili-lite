@@ -7,6 +7,10 @@
 //   bun bili.ts whoami                我是谁（cookie 属于哪个号）
 //   bun bili.ts feed [--n 5] [--kw 词,词]
 //                                       今天的候选（只读，排除看过的；搜什么自己定，不给就热门）
+//   bun bili.ts up <mid|名字> [--n 20] [--page 1] [--order pubdate|click|stow]
+//                                       某位 UP 的投稿列表（只读；顺着喜欢的人往下看）
+//   bun bili.ts following [--n 50] [--page 1]
+//                                       我关注了谁：名单 + mid（只读；要接着看就抄给 up）
 //   bun bili.ts video <BV> [--read 全文|mm:ss-mm:ss]
 //                                       看懂一条：概览（章节/字幕试读/弹幕热词/热评）；
 //                                       --read 深读字幕，不截断（只读）
@@ -35,7 +39,7 @@
 // ============================================================================
 import { pathToFileURL } from 'node:url'
 import { redact } from '../../lib/redact.ts'
-import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
+import { cmdSelftest, cmdWhoami, cmdLogin, cmdFeed, cmdUp, cmdFollowing, cmdVideo, cmdShots, cmdComment, cmdInbox, cmdInteract, cmdLedger, cmdTaste, cmdSchedule, HELP } from './commands.ts'
 
 /** 极简参数解析：--k v / --k（值为 true）/ 其余算位置参数 */
 function parseArgs(rest: string[]): { flags: Map<string, string | true>; positional: string[] } {
@@ -70,6 +74,8 @@ if (invokedDirectly) {
     else if (cmd === 'login') await cmdLogin()
     else if (cmd === 'whoami') await cmdWhoami()
     else if (cmd === 'feed') await cmdFeed(flags)
+    else if (cmd === 'up') await cmdUp(flags, positional)
+    else if (cmd === 'following') await cmdFollowing(flags)
     else if (cmd === 'video') await cmdVideo(flags, positional)
     else if (cmd === 'shots') await cmdShots(flags, positional)
     else if (cmd === 'comment') await cmdComment(flags, positional)
