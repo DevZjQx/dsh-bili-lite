@@ -67,11 +67,15 @@ export function ffmpegCaps(bin) {
     const hit = capsCache.get(bin);
     if (hit)
         return hit;
-    let caps = { drawtext: false, ssim: false };
+    let caps = { drawtext: false, ssim: false, psnr: false };
     try {
         const r = spawnSync(bin, ['-hide_banner', '-filters'], { encoding: 'utf8', timeout: 10_000, maxBuffer: 4 * 1024 * 1024 });
         const s = String(r.stdout ?? '');
-        caps = { drawtext: /\bdrawtext\b/.test(s), ssim: /\bssim\b/.test(s) };
+        caps = {
+            drawtext: /\bdrawtext\b/.test(s),
+            ssim: /\bssim\b/.test(s),
+            psnr: /\bpsnr\b/.test(s),
+        };
     }
     catch { /* 保守：当作没有 */ }
     capsCache.set(bin, caps);

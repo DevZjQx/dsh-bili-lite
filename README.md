@@ -144,8 +144,10 @@ bun src/features/bili-agent/bili.ts shots <BV>                              # 3�
 bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2             # 更细 / 换一 P
 bun src/features/bili-agent/bili.ts shots <BV> --at 03:20,05:10             # 只抽这两个时刻
 bun src/features/bili-agent/bili.ts shots <BV> --range 02:10-02:35 --fps 2 --diff  # 区间密抽，只留变化帧
-bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-ignore-bottom 0.15
-                                                     # 口播 / 白板：字幕在变不算画面变
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-ignore-bottom 0.3
+                                                     # 口播 / 白板：字幕带不算画面变
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-threshold 6
+                                                     # 人物轻微晃动 / 噪点不算画面变
 bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid 2x2  # 裁一块看卡片 / 角落
 ```
 
@@ -155,8 +157,14 @@ bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid
   图离开终端也能对上字幕；同一秒里有多帧时带十分之一秒（`00:12.3`）。
 - **先扫后定位**：3×3 看结构，`--at` / `--range` 看具体那一段；`--diff` 只留画面真的变过的帧，
   帧数超过一张图的格数就多出几张图（按格数平均分、缺的格补黑），不硬塞。
+- **候选 40 帧封顶，超了自动降帧率**：`--fps` 只是想要的速度，区间太长就按 40 帧反算（10 分钟大概 0.07fps），
+  终端会写「从 2fps 降下来的」；不报错、也不让你自己算。
 - **`--diff` 对字幕不设防**：口播 / 白板类视频画面不动、字幕整行重绘，相邻帧 SSIM 约 0.98（阈值 0.985），
-  会被当成「变了」。加 `--diff-ignore-bottom 0.15` 把底部字幕带排除 —— 同一对帧回到 1.00，真换一张卡片仍有 0.96。
+  会被当成「变了」。`--diff-ignore-bottom` 把底部字幕带整条排除，**高度按字幕实际占多高给（常见 0.2–0.35，
+  0.15 只够窄字幕条）**。同一对帧裁完回到 1.00，真换一张卡片仍有 0.96。
+- **两种判据，各管一摊**：默认 SSIM（看结构）；`--diff-threshold 6` 换成平均像素差（0–255，由 PSNR 换算）——
+  SSIM 对「人没换姿势、全身在微微动」很敏感，像素差对这种微动更钝，对「整块换色」反而更灵
+  （色度也算进去）。给了它就不再走 SSIM。
 - **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
 - **缓存与清理**：同一 BV / page / 参数 7 天内复用；`shots/` 只留最近 40 张（`--out` 指定的目录不参与清理）。
 - **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，

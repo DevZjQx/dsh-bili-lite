@@ -544,18 +544,34 @@ function pruneShots() {
  * 1.0，而真换一张卡片仍然只有 0.96 —— 判据要的是后者。
  */
 async function ssimScore(bin, a, b, ignoreBottom, signal) {
+    return pairScore(bin, a, b, ignoreBottom, 'ssim', signal, (r) => {
+        const m = /All:([0-9.]+)/.exec(r);
+        return m ? Number(m[1]) : null;
+    });
+}
+/**
+ * 平均像素差（0–255）：由 psnr 的 average 换算（RMSE = 255 / 10^(dB/20)）。
+ * 用 average 而不是只看 y —— 色块整块换色时亮度可能几乎没变，色度平面才看得出来。
+ */
+async function pixelDelta(bin, a, b, ignoreBottom, signal) {
+    return pairScore(bin, a, b, ignoreBottom, 'psnr', signal, (r) => {
+        const m = /average:([0-9.]+|inf)/.exec(r);
+        if (!m)
+            return null;
+        return m[1] === 'inf' ? 0 : 255 / 10 ** (Number(m[1]) / 20);
+    });
+}
+/** 两帧比一次：先按 ignoreBottom 裁掉底部，再跑 ssim / psnr（两者的 crop 写法必须一致） */
+async function pairScore(bin, a, b, ignoreBottom, tail, signal, parse) {
     const keep = 1 - Math.max(0, Math.min(0.9, ignoreBottom));
-    const vf = keep < 1
-        ? `[0:v]crop=iw:trunc(ih*${keep.toFixed(4)}/2)*2:0:0,setsar=1[x];`
-            + `[1:v]crop=iw:trunc(ih*${keep.toFixed(4)}/2)*2:0:0,setsar=1[y];[x][y]ssim`
-        : 'ssim';
+    const crop = (i) => `[${i}:v]crop=iw:trunc(ih*${keep.toFixed(4)}/2)*2:0:0,setsar=1[${i === 0 ? 'x' : 'y'}]`;
+    const vf = keep < 1 ? `${crop(0)};${crop(1)};[x][y]${tail}` : tail === 'ssim' ? 'ssim' : 'psnr';
     try {
         const r = await runFfmpegAsync(bin, [
             '-nostdin', '-hide_banner', '-loglevel', 'info', '-nostats',
             '-i', a, '-i', b, '-lavfi', vf, '-f', 'null', '-',
         ], { timeout: 30_000, signal });
-        const m = /All:([0-9.]+)/.exec(r.stderr);
-        return m ? Number(m[1]) : null;
+        return parse(r.stderr);
     }
     catch (e) {
         if (isFfmpegAbort(e))
@@ -569,7 +585,8 @@ async function ssimScore(bin, a, b, ignoreBottom, signal) {
  *
  * 不落整段视频 —— 对直链按时间点远程 seek，只读需要的那几个字节范围。
  * 取帧 4 路并发；一帧失败重试一次，仍失败就留黑格并在 missingSec 里点名，
- * 不因为一格毁掉整张图。range + diff 时先密抽、再按 SSIM 丢掉没变的帧，
+ * 不因为一格毁掉整张图。range + diff 时先密抽、再按 SSIM（或 --diff-threshold 的像素差）
+ * 丢掉没变的帧；候选帧数超过 40 就自动降帧率（区间太长时会低于 1fps），不直接报错。
  * 帧数超过一张图的格数就出第二张 —— 宁可多一张，不把格子塞满。
  *
  * 同一 BV / page / 参数在 7 天内直接复用缓存（SHOTS_DIR 只留最近 40 张）。
@@ -605,12 +622,25 @@ export async function shots(opts) {
     if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) {
         throw new BiliError('usage', '--fps 要在 1–5 之间', '区间不长，2 帧/秒通常够了');
     }
+    // 实际用的帧率：区间太长时按 40 帧上限自动降下来（可以低于 1fps）
+    let effFps = fps;
+    let fpsClamped = false;
     const ignoreBottom = opts.diffIgnoreBottom ?? 0;
     if (ignoreBottom !== 0) {
         if (!opts.diff)
             throw new BiliError('usage', '--diff-ignore-bottom 只配 --diff', '它只影响「画面变没变」的判断，不影响取帧');
         if (!Number.isFinite(ignoreBottom) || ignoreBottom <= 0 || ignoreBottom > 0.9) {
-            throw new BiliError('usage', '--diff-ignore-bottom 要在 0–0.9 之间', '0.15 = 忽略画面最下面 15%（字幕常在那）');
+            throw new BiliError('usage', '--diff-ignore-bottom 要在 0–0.9 之间', '按字幕实际占的高度给（常见 0.2–0.35）：0.15 只够窄字幕条');
+        }
+    }
+    // 像素差判据（0–255 的平均差）：给了它就不用 SSIM —— 人物轻微晃动在 SSIM 上未必过得了
+    // 阈值，但它真实存在（人物真的换了姿势），两种判据点不是一回事，只能选一个
+    const diffThreshold = opts.diffThreshold;
+    if (diffThreshold !== undefined) {
+        if (!opts.diff)
+            throw new BiliError('usage', '--diff-threshold 只配 --diff', '它只影响「画面变没变」的判断，不影响取帧');
+        if (!Number.isFinite(diffThreshold) || diffThreshold <= 0 || diffThreshold > 64) {
+            throw new BiliError('usage', '--diff-threshold 要在 0–64 之间（0–255 的平均像素差）', '口播 / 白板类先试 6–8；配 --diff 用');
         }
     }
     const crop = opts.crop;
@@ -633,6 +663,7 @@ export async function shots(opts) {
         fps: fps ?? 0,
         diff: !!opts.diff,
         diffIgnoreBottom: ignoreBottom,
+        diffThreshold: diffThreshold ?? 0,
         crop: crop ? crop.map((n) => n.toFixed(3)).join(',') : '',
     })).digest('hex');
     if (useCache) {
@@ -680,19 +711,18 @@ export async function shots(opts) {
             throw new BiliError('usage', `--range 超出可抽范围（00:00–${formatClock(span)}）`, '起点要早于终点，且落在视频里');
         }
         if (fps !== undefined) {
-            const step = 1 / fps;
+            // 上限卡的是「候选帧数」，不是帧率：区间太长就自动降帧率（可以低于 1fps，即一格隔几秒），
+            // 而不是让调用方自己算。diff 之后往往只剩个位数，先抽满比直接报错有用。
+            const durSec = to - from;
+            const fitted = Math.min(fps, MAX_CANDIDATES / durSec);
+            if (fitted < fps) {
+                effFps = fitted;
+                fpsClamped = true;
+            }
+            const step = 1 / fitted;
             const out = [];
-            for (let t = from + step / 2; t < to; t += step)
+            for (let t = from + step / 2; t < to && out.length < MAX_CANDIDATES; t += step) {
                 out.push(Math.min(Math.max(0, to - 0.01), t));
-            if (out.length > MAX_CANDIDATES) {
-                // 上限是「候选帧数」，所以把两条出路都算成具体数：帧率降到多少，或区间缩到几秒
-                const durSec = to - from;
-                const maxFps = MAX_CANDIDATES / durSec;
-                const maxSec = Math.floor(MAX_CANDIDATES / fps);
-                const hint = maxFps >= 1
-                    ? `降到 ${Number(maxFps.toFixed(1))}fps 以内，或把区间缩到 ${maxSec} 秒以内（现在 ${Math.round(durSec)} 秒）`
-                    : `这段就算 1fps 也要 ${Math.ceil(durSec)} 帧 —— 把区间缩到 ${maxSec} 秒以内，或改用 --at 点几个时刻`;
-                throw new BiliError('usage', `区间 ${formatClock(from)}–${formatClock(to)}（${Math.round(durSec)} 秒）× ${fps}fps = ${out.length} 帧，超过 ${MAX_CANDIDATES} 帧上限`, hint);
             }
             planned = out;
         }
@@ -716,9 +746,11 @@ export async function shots(opts) {
         times: planned,
         mode,
         range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
-        fps,
+        fps: effFps,
+        requestedFps: fpsClamped ? fps : undefined,
         diff: !!opts.diff,
         diffIgnoreBottom: ignoreBottom || undefined,
+        diffThreshold,
         candidates: planned.length,
     });
     // 格子尺寸跟画面（裁切后）比例走；竖屏就 360×640，裁一块就按裁切后的比例
@@ -731,6 +763,9 @@ export async function shots(opts) {
     // 格号条在取帧时就 pad 出来：这样画字成不成功，每格尺寸都一样（拼图要求等大），
     // 画上去也只占黑边，不压画面
     const caps = ffmpegCaps(ff);
+    if (diffThreshold !== undefined && !caps.psnr) {
+        throw new BiliError('unsupported', '这台 ffmpeg 没有 psnr 滤镜，用不了 --diff-threshold', '去掉它就走 SSIM 判据（--diff），或者换一份带完整滤镜的 ffmpeg');
+    }
     const font = caps.drawtext ? findFfmpegFont() : null;
     let labels = !!font;
     const label = labels && font ? labelMetrics(cw) : null;
@@ -788,17 +823,21 @@ export async function shots(opts) {
             const firstErr = extracted.find((f) => f.error)?.error;
             throw new BiliError('upstream', '一帧都没抽出来', firstErr ? `最后一次：${firstErr.slice(0, 160)}` : '换 --p / 稍后再试');
         }
-        // ── 去重：先密抽，再只留画面真的变过的帧；时间码等选完再烧，免得文字差异干扰 SSIM ──
+        // ── 去重：先密抽，再只留画面真的变过的帧；格号 / 时间码等选完再烧，免得文字差异干扰判据 ──
         let slots = [];
         let dropped;
         if (opts.diff) {
             const keep = [okFrames[0]];
-            if (caps.ssim && okFrames.length > 1) {
+            const usePixel = diffThreshold !== undefined;
+            if ((usePixel || caps.ssim) && okFrames.length > 1) {
                 const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f]);
-                const sims = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal));
+                const scores = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => (usePixel
+                    ? pixelDelta(ff, a.file, b.file, ignoreBottom, opts.signal)
+                    : ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal)));
                 pairs.forEach(([, b], i) => {
-                    const sim = sims[i];
-                    if (sim === null || sim < DIFF_SSIM)
+                    const v = scores[i];
+                    // 算不出来（滤镜报错 / 解码失败）按「变了」处理，宁可多留一帧也别漏掉一段
+                    if (v === null || (usePixel ? v > diffThreshold : v < DIFF_SSIM))
                         keep.push(b);
                 });
             }
@@ -897,10 +936,12 @@ export async function shots(opts) {
             timesSec: sheets.flatMap((s) => s.timesSec),
             mode,
             range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
-            fps,
+            fps: effFps,
+            requestedFps: fpsClamped ? fps : undefined,
             diff: opts.diff ? true : undefined,
             diffIgnoreBottom: ignoreBottom || undefined,
-            candidates: fps !== undefined ? planned.length : undefined,
+            diffThreshold,
+            candidates: effFps !== undefined ? planned.length : undefined,
             dropped,
             labels,
             missingSec,

@@ -355,7 +355,9 @@ function drafts() {
         // ── 抽帧看画面 ──
         {
             name: 'bili_shots',
-            description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧，diffIgnoreBottom 可跳过底部字幕带）。'
+            description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧；'
+                + 'diffIgnoreBottom 跳过底部字幕带，diffThreshold 换成像素差判据治轻微晃动）。'
+                + '候选帧超过 40 会自动降帧率并告诉你实际用了多少，不报错。'
                 + '格号 + 时间码烧在每格顶部的黑边上（如「3 12:30」，不压画面），返回图片绝对路径 —— 还要用看图工具读。'
                 + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
             parameters: params({
@@ -366,7 +368,8 @@ function drafts() {
                 range: str('只抽这一段：mm:ss-mm:ss（如 02:10-02:35）；可与 fps / diff 同用'),
                 fps: num('区间密抽帧率 1–5（只配 range；给 diff 时默认 2）'),
                 diff: bool('区间密抽后只留画面真的变过的帧（配 range 用）'),
-                diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，给 0.15 就不算画面变化'),
+                diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，按字幕实际占多高给，常见 0.2–0.35'),
+                diffThreshold: num('换判据：平均像素差（0–255）超过它才算变了，给了就不用 SSIM；人物轻微晃动治不住时用，口播 / 白板先试 6–8'),
                 crop: str('裁一块看细节：x,y,w,h 为 0–1 相对坐标（如 0.62,0.06,0.36,0.30）'),
             }, ['bvid']),
             schema: obj({
@@ -388,8 +391,10 @@ function drafts() {
                 mode: oneOf('抽帧方式', ['grid', 'at', 'range']),
                 range: obj({ fromSec: { type: 'number' }, toSec: { type: 'number' } }, ['fromSec', 'toSec']),
                 fps: { type: 'number' },
+                requestedFps: { type: 'number' },
                 diff: { type: 'boolean' },
                 diffIgnoreBottom: { type: 'number' },
+                diffThreshold: { type: 'number' },
                 candidates: { type: 'number' },
                 dropped: { type: 'number' },
                 labels: { type: 'boolean' },
@@ -429,6 +434,7 @@ function drafts() {
                         fps: asNum(a.fps),
                         diff: asBool(a.diff),
                         diffIgnoreBottom: asNum(a.diffIgnoreBottom),
+                        diffThreshold: asNum(a.diffThreshold),
                         crop,
                         signal: exec.signal,
                     });
@@ -440,13 +446,19 @@ function drafts() {
             render(_args, value) {
                 const v = value;
                 const ignore = v.diffIgnoreBottom ? `（忽略底部 ${Math.round(v.diffIgnoreBottom * 100)}%）` : '';
+                const judge = v.diffThreshold !== undefined ? `（像素差 > ${v.diffThreshold}）` : '';
+                const fpsText = v.fps === undefined
+                    ? ''
+                    : v.requestedFps
+                        ? ` · ${Number(v.fps.toFixed(2))}fps 密抽（从 ${v.requestedFps}fps 降下来的：40 帧上限）`
+                        : ` · ${v.fps}fps 密抽`;
                 const count = v.sheets.reduce((n, s) => n + s.timesSec.length, 0);
                 const clock = formatClockFine;
                 const modeText = v.mode === 'grid'
                     ? `等间隔 ${v.cols * v.rows} 帧`
                     : v.mode === 'at'
                         ? `指定 ${count} 个时间点`
-                        : `区间 ${formatClockFine(v.range?.fromSec ?? 0)}–${formatClockFine(v.range?.toSec ?? 0)}${v.fps ? ` · ${v.fps}fps 密抽` : ''}${v.diff ? ` → 留变化 ${count} 帧${ignore}` : ''}`;
+                        : `区间 ${formatClockFine(v.range?.fromSec ?? 0)}–${formatClockFine(v.range?.toSec ?? 0)}${fpsText}${v.diff ? ` → 留变化 ${count} 帧${judge}${ignore}` : ''}`;
                 const head = v.paths.length > 1
                     ? `《${v.title}》${modeText}${v.cached ? '（复用缓存）' : ''} → ${v.paths.length} 张`
                     : `《${v.title}》${modeText} → ${v.paths[0]}${v.cached ? '（复用缓存）' : ''}`;
