@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { apiGet, apiPost, explainCode, loadCred, whoami, wbi, getFollowingFeed, searchUsers, getSpaceVideos, getFollowings, getView, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getMsgFeed, getThreadReplies, banUntil, banWhy, getPlayUrl, UA } from '../../lib/bilibili.js';
-import { requireFfmpeg, runFfmpegAsync, ffmpegCaps, findFfmpegFont, isFfmpegAbort } from '../../lib/ffmpeg.js';
+import { requireFfmpeg, runFfmpegAsync, ffmpegCaps, findFfmpegFont, isFfmpegAbort, probeVideoSize } from '../../lib/ffmpeg.js';
 import { formatClock, formatClockFine } from '../../lib/timecode.js';
 import { SHOTS_DIR } from '../../config/paths.js';
 import { seenSet, ledgerAppend, readLedger, writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, today } from './ledger.js';
@@ -435,10 +435,12 @@ async function transcript(bvid, title, v, credential, read) {
 const SHOTS_KEEP = 40;
 const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000;
 /** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
-const SHOTS_CACHE_VERSION = 6;
+const SHOTS_CACHE_VERSION = 7;
 const FRAME_CONCURRENCY = 4;
 const FRAME_ATTEMPTS = 2;
 const MAX_CANDIDATES = 40;
+/** 一张拼图的宽度预算：每格的长边就按它除以格数定（4x4 仍是 640） */
+const SHEET_MAX_WIDTH = 2560;
 /** 相邻帧 SSIM ≥ 这个值就当「没变」 */
 const DIFF_SSIM = 0.985;
 /**
@@ -449,6 +451,8 @@ const DIFF_PIXEL_FLOOR = 15;
 /** 只清自己生成的图：BV-pN-时间-格数(-第几张).jpg */
 const SHOTS_FILE_RE = /^BV[0-9A-Za-z]{10}(?:-p\d+)?-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-\d+x\d+(?:-\d+of\d+)?\.jpg$/;
 const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+/** 向下取到偶数：缩放 / 拼图要偶数边，向下取才不会把整张图撑过预算 */
+const evenFloor = (n) => Math.max(2, Math.floor(n / 2) * 2);
 /** 限并发跑任务；任何一项抛错就整体失败（abort 时其余项会很快看到 signal） */
 async function mapLimit(items, limit, fn) {
     const out = new Array(items.length);
@@ -829,13 +833,22 @@ export async function shots(opts) {
         candidates: planned.length,
         note,
     });
-    // 格子尺寸跟画面（裁切后）比例走；竖屏就 360×640，裁一块就按裁切后的比例
-    const dw = Number(v.dimension?.width) || 16;
-    const dh = Number(v.dimension?.height) || 9;
+    // 每格的长边：min(真实播放尺寸, 拼图宽度预算 ÷ 格数)。4x4 仍是 640，2x2 到 1280，1x1 就到源尺寸 ——
+    // 字卡 / 气泡才读得清。真实尺寸得探一次：qn=80 常被降到 64（720P），照投稿元数据的 1920 排版是空放大。
+    const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`;
+    const real = await probeVideoSize(ff, play.url, headers, opts.signal);
+    const dw = Number(real?.width) || Number(v.dimension?.width) || 16;
+    const dh = Number(real?.height) || Number(v.dimension?.height) || 9;
     const ar = crop ? (dw * crop[2]) / (dh * crop[3]) : dw / dh;
-    const base = 640;
-    const cw = even(ar >= 1 ? base : base * ar);
-    const ch = even(ar >= 1 ? base / ar : base);
+    // 取 cols / rows 里大的那个当分母：2x4 这种横长条不按列数放宽，免得拼出 1280×4860 那种又高又费 token 的图
+    const base = evenFloor(Math.min(Math.max(dw, dh), Math.floor(SHEET_MAX_WIDTH / Math.max(cols, rows))));
+    const cw = evenFloor(ar >= 1 ? base : base * ar);
+    const ch = evenFloor(ar >= 1 ? base / ar : base);
+    // 字卡 / 气泡 / 代码这种「画面就是文字」的片子，格子越少字越大、越好读 —— 顺手提醒一句
+    if (capacity > 4) {
+        const hint = `${cols}×${rows} 每格 ${cw}px：画面以文字为主（字卡 / 气泡 / 代码）时，--grid 1x1 或 2x2 更清楚（代价是时间点更少）`;
+        note = note ? `${note} ${hint}` : hint;
+    }
     // 格号条在取帧时就 pad 出来：这样画字成不成功，每格尺寸都一样（拼图要求等大），
     // 画上去也只占黑边，不压画面
     const caps = ffmpegCaps(ff);
@@ -856,7 +869,6 @@ export async function shots(opts) {
         `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos`,
         `pad=${cw}:${chp}:(ow-iw)/2:${label ? label.height : '(oh-ih)/2'}:color=black`,
     ].join(',');
-    const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`;
     const outDir = opts.outDir ? path.resolve(opts.outDir) : SHOTS_DIR;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
     const stem = `${bvid}${p > 1 ? `-p${p}` : ''}-${stamp}-${cols}x${rows}`;

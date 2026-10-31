@@ -545,7 +545,7 @@ export async function cmdShots(flags, positional) {
         : '';
     if (restNote)
         console.log(`  注意: ${restNote}`);
-    console.log('  看不清就 --grid 4x4、--crop 裁一块；想看某段就 --range 02:10-02:25 --fps 2 --diff');
+    console.log('  看不清就降格数（--grid 1x1 / 2x2）或 --crop 裁一块；想看某段就 --range 02:10-02:25 --fps 2 --diff');
     console.log('  口播 / 白板类（画面不动、字幕在变）加 --diff-ignore-bottom 0.25–0.35，按字幕实际占多高给');
     console.log('  人没换姿势、全身在微微动也算「变了」的话，改用 --diff-threshold 8（先看还剩多少重复，再往 12 / 16 / 20 加）');
 }

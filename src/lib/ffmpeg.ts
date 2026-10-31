@@ -176,3 +176,94 @@ export function runFfmpegAsync(
     }))
   })
 }
+
+// ── 探测播放流的真实分辨率 ────────────────────────────────────────────────
+
+export interface VideoSize { width: number; height: number }
+
+const PROBE_EXE = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
+
+/** ffprobe 在哪：跟 ffmpeg 同目录的最优先（装在一起的基本都这样），其次 PATH */
+function ffprobePath(bin: string): string | null {
+  const beside = path.join(path.dirname(bin), PROBE_EXE)
+  if (isFile(beside)) return beside
+  for (const d of String(process.env.PATH ?? '').split(path.delimiter)) {
+    if (!d) continue
+    const f = path.join(d, PROBE_EXE)
+    if (isFile(f)) return f
+  }
+  return null
+}
+
+/** 跑一次、把 stdout / stderr 都收回来（不看退出码 —— 探测要的就是「报错」里那段） */
+function runCapture(
+  bin: string,
+  args: string[],
+  timeout: number,
+  signal?: AbortSignal,
+): Promise<{ code: number | null; out: string; err: string }> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) { resolve({ code: null, out: '', err: '' }); return }
+    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    let settled = false
+    function done(code: number | null): void {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', kill)
+      resolve({ code, out, err })
+    }
+    function kill(): void { child.kill('SIGKILL'); done(null) }
+    const timer = setTimeout(kill, timeout)
+    signal?.addEventListener('abort', kill, { once: true })
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => { out = (out + d).slice(-4000) })
+    child.stderr?.on('data', (d: string) => { err = (err + d).slice(-8000) })
+    child.on('error', () => done(null))
+    child.on('close', (code) => done(code))
+  })
+}
+
+/** 从一段文本里挑出「宽x高」—— 取最后一个，避开 codec tag 里的 0x31637661 */
+function pickSize(text: string): VideoSize | null {
+  const all = [...text.matchAll(/(\d{2,5})x(\d{2,5})/g)]
+  const last = all.at(-1)
+  if (!last) return null
+  const width = Number(last[1])
+  const height = Number(last[2])
+  return width >= 16 && height >= 16 ? { width, height } : null
+}
+
+/**
+ * 播放流的真实分辨率 —— 投稿元数据（view.dimension）不能当真：
+ * 要 1080P（qn=80）常只给 720P（qn=64），照元数据的 1920 排版就是把 1280 放大，
+ * 多花像素、一点没多出信息。
+ *
+ * 先问 ffprobe；没有就在 ffmpeg 的 stderr 里找（Stream #0:0 ... Video: ... 1280x720 ...）。
+ * 都失败 = null，调用方退回元数据。
+ */
+export async function probeVideoSize(
+  bin: string,
+  url: string,
+  headers: string,
+  signal?: AbortSignal,
+): Promise<VideoSize | null> {
+  // -headers 是 http 输入选项：喂本地文件时 ffmpeg 会直接「Option headers not found」
+  const head = /^https?:/i.test(url) ? ['-headers', headers] : []
+  const probe = ffprobePath(bin)
+  if (probe) {
+    const r = await runCapture(probe, [
+      '-v', 'error', ...head, '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', '-i', url,
+    ], 20_000, signal)
+    const size = pickSize(r.out)
+    if (size) return size
+  }
+  const r = await runCapture(bin, ['-hide_banner', '-nostdin', ...head, '-i', url], 20_000, signal)
+  // 只看视频流那一行：音频 / 章节里也可能有 1280x720 这种巧合
+  const line = r.err.split('\n').find((l) => /Stream #\d+:\d+.*Video:/.test(l))
+  return line ? pickSize(line) : null
+}
