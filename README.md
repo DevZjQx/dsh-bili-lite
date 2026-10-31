@@ -149,7 +149,9 @@ bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --dif
 bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-threshold 12
                                                      # 人物轻微晃动 / 噪点不算画面变
 bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-report
-                                                     # 打一张分数分布，先看 P75 / P90 再定阈值
+                                                     # 打一张像素差分布（P75 直接给阈值起点）
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-report --diff-judge ssim
+                                                     # 想看相似度就切 ssim（不能当阈值）
 bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid 2x2  # 裁一块看卡片 / 角落
 ```
 
@@ -170,8 +172,14 @@ bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid
   （色度也算进去）。给了它就不再走 SSIM。
 - **阈值别从 6 起**：实测 6 基本无效（40 帧里还留 36 帧），8 仍有成片重复，可用区间是 12–20。
   先 `--diff-threshold 8` 看还剩下多少重复，再往 12 / 16 / 20 加，直到数量接近你数出来的镜头数。
-- **`--diff-report` 一轮定阈值**：把相邻候选帧的差异分数打出来（P50 / P75 / P90 + 极值），
-  像素差挑落在 P75–P90 之间的值通常就是切点；单独给时只报告、不筛帧，不用为每个阈值各跑一遍。
+- **`--diff-report` 一轮定阈值**：默认报**像素差**（0–255，只有它能直接当阈值）的 P50 / P75 / P90 + 极值，
+  并给 `suggestedThreshold`（取 P75）当起点 —— 带 `--diff` 时照常筛帧，单独给时只报告、不丢帧。
+  想看相似度就 `--diff-judge ssim`（SSIM 越大越像，不能当阈值）。报告里的 `threshold` 是本次真正生效的
+  筛帧阈值（ssim 就是内置的 0.985），没筛帧就不出现 —— 所以 `--diff --diff-report` 是「按 SSIM 筛、按像素差报」，
+  正好拿 P75 去换阈值。
+- **分布没有「地板」就别用 diff 筛**：像素差 P50 > 15 说明相邻帧本来就全在变（快剪 / 大运镜），
+  阈值再调也分不开「切镜头」和「镜头内运动」—— note 会直接提醒，改用等间隔密抽，
+  或者反过来用 diff 只捞静止段。
 - **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
 - **缓存与清理**：同一 BV / page / 参数 7 天内复用；`shots/` 只留最近 40 张（`--out` 指定的目录不参与清理）。
 - **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，

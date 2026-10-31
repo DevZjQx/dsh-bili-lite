@@ -358,7 +358,8 @@ function drafts() {
             description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧；'
                 + 'diffIgnoreBottom 跳过底部字幕带，diffThreshold 换成像素差判据治轻微晃动）。'
                 + '候选帧超过 40 会自动降档（不低于 1fps；1fps 仍超就只取前 40 秒），note 写清原因和建议的 range 长度，不报错。'
-                + 'diffReport 额外带回相邻帧差异分布（P50 / P75 / P90），扫一轮就能定阈值。'
+                + 'diffReport 额外带回相邻帧差异分布（P50 / P75 / P90 + 按 P75 给的 suggestedThreshold）：默认按像素差（0–255，才对应 diffThreshold），'
+                + '要看相似度就 diffJudge=ssim。'
                 + '格号 + 时间码烧在每格顶部的黑边上（如「3 12:30」，不压画面），返回图片绝对路径 —— 还要用看图工具读。'
                 + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
             parameters: params({
@@ -372,6 +373,7 @@ function drafts() {
                 diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，按字幕实际占多高给，常见 0.25–0.35'),
                 diffThreshold: num('换判据：平均像素差（0–255）超过它才算变了，给了就不用 SSIM；先试 8，再按 diffReport 的 P75 / P90 往 12 / 16 / 20 加'),
                 diffReport: bool('只报告相邻帧的差异分布（P50 / P75 / P90 + 极值），配 range；给 diff 时照常筛帧，单独给时一帧不丢'),
+                diffJudge: oneOf('差异报告用哪套判据：pixel（0–255 像素差，默认，只有它能当 diffThreshold）/ ssim（相似度，越大越像）', ['pixel', 'ssim']),
                 crop: str('裁一块看细节：x,y,w,h 为 0–1 相对坐标（如 0.62,0.06,0.36,0.30）'),
             }, ['bvid']),
             schema: obj({
@@ -405,6 +407,7 @@ function drafts() {
                     p90: { type: 'number' },
                     min: { type: 'number' },
                     max: { type: 'number' },
+                    suggestedThreshold: { type: 'number' },
                     threshold: { type: 'number' },
                 }, ['judge', 'pairs', 'p50', 'p75', 'p90', 'min', 'max']),
                 note: { type: 'string' },
@@ -449,6 +452,7 @@ function drafts() {
                         diffIgnoreBottom: asNum(a.diffIgnoreBottom),
                         diffThreshold: asNum(a.diffThreshold),
                         diffReport: asBool(a.diffReport),
+                        diffJudge: a.diffJudge === 'pixel' || a.diffJudge === 'ssim' ? a.diffJudge : undefined,
                         crop,
                         signal: exec.signal,
                     });
@@ -495,6 +499,10 @@ function drafts() {
                     const num = (n) => (r.judge === 'ssim' ? n.toFixed(3) : n.toFixed(1));
                     lines.push(`差异分布（${r.judge === 'ssim' ? 'SSIM，越低越不同' : '平均像素差 0–255，越大越不同'}）：`
                         + `P50 ${num(r.p50)} · P75 ${num(r.p75)} · P90 ${num(r.p90)} · 范围 ${num(r.min)}–${num(r.max)}（${r.pairs} 对）`);
+                    if (r.suggestedThreshold !== undefined) {
+                        lines.push(`阈值起点 suggestedThreshold = ${r.suggestedThreshold}（取 P75）：拿来当 diffThreshold 试一把，`
+                            + '再数还剩多少重复；快剪 / 大运镜会吃掉一半镜头，只能当起点。');
+                    }
                 }
                 if (v.note)
                     lines.push(`注意：${v.note}`);

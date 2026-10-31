@@ -650,6 +650,11 @@ export interface ShotsOptions {
    * 配 diff 时照常筛帧；单独给时只报告、一帧不丢 —— 一轮就能把阈值定下来。
    */
   diffReport?: boolean
+  /**
+   * 报告用哪套判据：pixel（0–255 的像素差，默认 —— 只有它能直接当 diffThreshold 用）
+   * 或 ssim（相似度，越大越像，只看形态）。只影响报告，不影响筛帧。
+   */
+  diffJudge?: 'ssim' | 'pixel'
   /** 裁剪：相对坐标 [x,y,w,h]（0–1），配 2×2 看字幕卡片 / 角落文字 */
   crop?: [number, number, number, number]
   /** 取消信号：会真正 kill 正在跑的那一帧，不只是帧间检查 */
@@ -678,7 +683,12 @@ export interface ShotsDiffReport {
   p90: number
   min: number
   max: number
-  /** 本次实际用的阈值（没给就说明只做了报告） */
+  /**
+   * 阈值起点 = P75（只有 pixel 有；ssim 不是阈值判据）。
+   * 只是起点：快剪 / 大运镜的片子 P75 也很高，拿去用仍会吃掉一半镜头。
+   */
+  suggestedThreshold?: number
+  /** 本次**真的生效**的筛帧阈值（pixel 是 --diff-threshold，ssim 是内置的 0.985）；没筛帧就不给 */
   threshold?: number
 }
 
@@ -714,7 +724,7 @@ export interface ShotsResult {
   diffThreshold?: number
   /** 阈值扫描用的分数分布（给了 diffReport 才有） */
   diffReport?: ShotsDiffReport
-  /** 降档 / 截断说明：为什么实际帧率和请求的不一样、range 该缩到多长 */
+  /** 降档 / 截断说明（为什么帧率和请求的不一样、range 该缩到多长）；差异分布不可用时也在这里提醒 */
   note?: string
   /** 区间密抽一共抽了多少候选帧 */
   candidates?: number
@@ -737,12 +747,17 @@ export interface ShotsResult {
 const SHOTS_KEEP = 40
 const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000
 /** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
-const SHOTS_CACHE_VERSION = 5
+const SHOTS_CACHE_VERSION = 6
 const FRAME_CONCURRENCY = 4
 const FRAME_ATTEMPTS = 2
 const MAX_CANDIDATES = 40
 /** 相邻帧 SSIM ≥ 这个值就当「没变」 */
 const DIFF_SSIM = 0.985
+/**
+ * 像素差 P50 超过这条线就提醒：相邻帧普遍在变（快剪 / 大运镜），
+ * 阈值再往上调也分不开「切镜头」和「镜头内运动」。
+ */
+const DIFF_PIXEL_FLOOR = 15
 /** 只清自己生成的图：BV-pN-时间-格数(-第几张).jpg */
 const SHOTS_FILE_RE = /^BV[0-9A-Za-z]{10}(?:-p\d+)?-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-\d+x\d+(?:-\d+of\d+)?\.jpg$/
 
@@ -908,14 +923,18 @@ function diffStats(scores: Array<number | null>, judge: 'ssim' | 'pixel', thresh
   const vals = scores.filter((s): s is number => s !== null && Number.isFinite(s)).sort((a, b) => a - b)
   if (!vals.length) return undefined
   const at = (q: number): number => vals[Math.min(vals.length - 1, Math.max(0, Math.round((vals.length - 1) * q)))]
+  const p75 = at(0.75)
+  // 只有像素差能直接当阈值用；P75 是「切点大概率在这附近」的起点，不是答案
+  const rounded = Math.round(p75 * 10) / 10
   return {
     judge,
     pairs: vals.length,
     p50: at(0.5),
-    p75: at(0.75),
+    p75,
     p90: at(0.9),
     min: vals[0],
     max: vals[vals.length - 1],
+    suggestedThreshold: judge === 'pixel' && rounded > 0 && rounded <= 64 ? rounded : undefined,
     threshold,
   }
 }
@@ -928,7 +947,9 @@ function diffStats(scores: Array<number | null>, judge: 'ssim' | 'pixel', thresh
  * 取帧 4 路并发；一帧失败重试一次，仍失败就留黑格并在 missingSec 里点名，
  * 不因为一格毁掉整张图。range + diff 时先密抽、再按 SSIM（或 --diff-threshold 的像素差）
  * 丢掉没变的帧；候选帧数超过 40 就自动降档，但不低于 1fps —— 1fps 仍塞不下就只取前 40 秒，
- * 把原因和「range 该缩到多长」写进 note，不直接报错。--diff-report 再额外带回分数分布。
+ * 把原因和「range 该缩到多长」写进 note，不直接报错。--diff-report 再额外带回分数分布
+ * （默认 pixel：只有它能直接当阈值；--diff-judge ssim 才报相似度），
+ * 像素差 P50 超过 15 时 note 里提醒「这条片子没有低频地板，diff 可能分不出镜头」。
  * 帧数超过一张图的格数就出第二张 —— 宁可多一张，不把格子塞满。
  *
  * 同一 BV / page / 参数在 7 天内直接复用缓存（SHOTS_DIR 只留最近 40 张）。
@@ -986,6 +1007,17 @@ export async function shots(opts: ShotsOptions): Promise<ShotsResult> {
     }
   }
 
+  // 报告的判据：默认 pixel —— 只有它能直接当 diffThreshold 用；ssim 只是看相似度的形态
+  const diffJudge = opts.diffJudge
+  if (diffJudge !== undefined) {
+    if (diffJudge !== 'pixel' && diffJudge !== 'ssim') throw new BiliError('usage', '--diff-judge 只能是 pixel / ssim')
+    if (!opts.diffReport) throw new BiliError('usage', '--diff-judge 只配 --diff-report', '它只改报告用哪套判据，不影响筛帧')
+    if (diffJudge === 'ssim' && diffThreshold !== undefined) {
+      throw new BiliError('usage', '--diff-judge ssim 和 --diff-threshold 只能选一个', '阈值是按像素差（0–255）算的，SSIM 给不出阈值')
+    }
+  }
+  const reportJudge: 'ssim' | 'pixel' = diffJudge ?? 'pixel'
+
   const crop = opts.crop
   if (crop) {
     const [x, y, w, h] = crop
@@ -1008,6 +1040,7 @@ export async function shots(opts: ShotsOptions): Promise<ShotsResult> {
     diffIgnoreBottom: ignoreBottom,
     diffThreshold: diffThreshold ?? 0,
     diffReport: !!opts.diffReport,
+    diffJudge: opts.diffReport ? reportJudge : '',
     crop: crop ? crop.map((n) => n.toFixed(3)).join(',') : '',
   })).digest('hex')
   if (useCache) {
@@ -1125,6 +1158,10 @@ export async function shots(opts: ShotsOptions): Promise<ShotsResult> {
     throw new BiliError('unsupported', '这台 ffmpeg 没有 psnr 滤镜，用不了 --diff-threshold',
       '去掉它就走 SSIM 判据（--diff），或者换一份带完整滤镜的 ffmpeg')
   }
+  if (opts.diffReport && reportJudge === 'pixel' && !caps.psnr) {
+    throw new BiliError('unsupported', '这台 ffmpeg 没有 psnr 滤镜，出不了像素差分布',
+      '加 --diff-judge ssim 看相似度分布（它不能直接当阈值），或者换一份带完整滤镜的 ffmpeg')
+  }
   const font = caps.drawtext ? findFfmpegFont() : null
   let labels = !!font
   const label = labels && font ? labelMetrics(cw) : null
@@ -1185,16 +1222,33 @@ export async function shots(opts: ShotsOptions): Promise<ShotsResult> {
     let slots: Array<{ t: number; file: string | null }> = []
     let dropped: number | undefined
     let diffReport: ShotsDiffReport | undefined
+    // 筛帧判据和报告判据可以不是同一套（默认报告 pixel —— 只有它能当阈值用）。
+    // 两套分数各算一遍，但同一套只算一次。
     const usePixel = diffThreshold !== undefined
-    const canScore = usePixel || caps.ssim
-    let scores: Array<number | null> = []
-    if ((opts.diff || opts.diffReport) && canScore && okFrames.length > 1) {
-      const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f] as const)
-      scores = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => (
-        usePixel
+    const filterJudge: 'ssim' | 'pixel' = usePixel ? 'pixel' : 'ssim'
+    const pairs = okFrames.length > 1 ? okFrames.slice(1).map((f, i) => [okFrames[i], f] as const) : []
+    const scoreMemo = new Map<'ssim' | 'pixel', Array<number | null>>()
+    const scoresFor = async (judge: 'ssim' | 'pixel'): Promise<Array<number | null>> => {
+      const hit = scoreMemo.get(judge)
+      if (hit) return hit
+      const out = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => (
+        judge === 'pixel'
           ? pixelDelta(ff, a.file, b.file, ignoreBottom, opts.signal)
           : ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal)))
-      if (opts.diffReport) diffReport = diffStats(scores, usePixel ? 'pixel' : 'ssim', diffThreshold)
+      scoreMemo.set(judge, out)
+      return out
+    }
+    let scores: Array<number | null> = []
+    if (opts.diff && (usePixel ? caps.psnr : caps.ssim) && pairs.length) {
+      scores = await scoresFor(filterJudge)
+    }
+    let reportScores: Array<number | null> | undefined
+    if (opts.diffReport && (reportJudge === 'pixel' ? caps.psnr : caps.ssim) && pairs.length) {
+      reportScores = await scoresFor(reportJudge)
+      // threshold 只在「筛帧用的就是这套判据」时才算真的生效
+      diffReport = diffStats(reportScores, reportJudge, opts.diff && reportJudge === filterJudge
+        ? (filterJudge === 'pixel' ? diffThreshold : DIFF_SSIM)
+        : undefined)
     }
     if (opts.diff) {
       const keep: Array<{ t: number; file: string }> = [okFrames[0]]
@@ -1215,6 +1269,16 @@ export async function shots(opts: ShotsOptions): Promise<ShotsResult> {
       })
     } else {
       slots = extracted.map((f) => ({ t: f.t, file: f.file }))
+    }
+    // P50 太高说明这条片子没有低频地板（快剪 / 大运镜）：阈值再调也分不出镜头，先提醒一句
+    const pixelStats = diffReport?.judge === 'pixel'
+      ? diffReport
+      : usePixel && scores.length ? diffStats(scores, 'pixel') : undefined
+    if (pixelStats && pixelStats.p50 > DIFF_PIXEL_FLOOR) {
+      const warn = `相邻帧普遍差异大（像素差 P50 ${pixelStats.p50.toFixed(1)} > ${DIFF_PIXEL_FLOOR}）：`
+        + '这条片子没有低频地板，阈值再调也分不开「切镜头」和「镜头内运动」—— '
+        + '建议等间隔密抽（--range 不配 --diff），或者反过来用 diff 只捞静止段'
+      note = note ? `${note} ${warn}` : warn
     }
     const missingSec = extracted.filter((f) => !f.file).map((f) => f.t)
 
