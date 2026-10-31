@@ -357,7 +357,8 @@ function drafts() {
             name: 'bili_shots',
             description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧；'
                 + 'diffIgnoreBottom 跳过底部字幕带，diffThreshold 换成像素差判据治轻微晃动）。'
-                + '候选帧超过 40 会自动降帧率并告诉你实际用了多少，不报错。'
+                + '候选帧超过 40 会自动降档（不低于 1fps；1fps 仍超就只取前 40 秒），note 写清原因和建议的 range 长度，不报错。'
+                + 'diffReport 额外带回相邻帧差异分布（P50 / P75 / P90），扫一轮就能定阈值。'
                 + '格号 + 时间码烧在每格顶部的黑边上（如「3 12:30」，不压画面），返回图片绝对路径 —— 还要用看图工具读。'
                 + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
             parameters: params({
@@ -366,10 +367,11 @@ function drafts() {
                 page: num('第几 P（默认 1）'),
                 at: str('只抽这些时刻：mm:ss 或秒，逗号分隔（如 03:20,05:10）；与 range 二选一'),
                 range: str('只抽这一段：mm:ss-mm:ss（如 02:10-02:35）；可与 fps / diff 同用'),
-                fps: num('区间密抽帧率 1–5（只配 range；给 diff 时默认 2）'),
+                fps: num('区间密抽帧率 1–5（只配 range；给 diff / diffReport 时默认 2）'),
                 diff: bool('区间密抽后只留画面真的变过的帧（配 range 用）'),
-                diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，按字幕实际占多高给，常见 0.2–0.35'),
-                diffThreshold: num('换判据：平均像素差（0–255）超过它才算变了，给了就不用 SSIM；人物轻微晃动治不住时用，口播 / 白板先试 6–8'),
+                diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，按字幕实际占多高给，常见 0.25–0.35'),
+                diffThreshold: num('换判据：平均像素差（0–255）超过它才算变了，给了就不用 SSIM；先试 8，再按 diffReport 的 P75 / P90 往 12 / 16 / 20 加'),
+                diffReport: bool('只报告相邻帧的差异分布（P50 / P75 / P90 + 极值），配 range；给 diff 时照常筛帧，单独给时一帧不丢'),
                 crop: str('裁一块看细节：x,y,w,h 为 0–1 相对坐标（如 0.62,0.06,0.36,0.30）'),
             }, ['bvid']),
             schema: obj({
@@ -395,6 +397,17 @@ function drafts() {
                 diff: { type: 'boolean' },
                 diffIgnoreBottom: { type: 'number' },
                 diffThreshold: { type: 'number' },
+                diffReport: obj({
+                    judge: { type: 'string' },
+                    pairs: { type: 'number' },
+                    p50: { type: 'number' },
+                    p75: { type: 'number' },
+                    p90: { type: 'number' },
+                    min: { type: 'number' },
+                    max: { type: 'number' },
+                    threshold: { type: 'number' },
+                }, ['judge', 'pairs', 'p50', 'p75', 'p90', 'min', 'max']),
+                note: { type: 'string' },
                 candidates: { type: 'number' },
                 dropped: { type: 'number' },
                 labels: { type: 'boolean' },
@@ -435,6 +448,7 @@ function drafts() {
                         diff: asBool(a.diff),
                         diffIgnoreBottom: asNum(a.diffIgnoreBottom),
                         diffThreshold: asNum(a.diffThreshold),
+                        diffReport: asBool(a.diffReport),
                         crop,
                         signal: exec.signal,
                     });
@@ -476,6 +490,14 @@ function drafts() {
                     lines.push(`没抽出来：${v.missingSec.map((t) => clock(t)).join(' ')}`);
                 if (v.dropped)
                     lines.push(`区间共 ${v.candidates ?? 0} 帧，丢掉 ${v.dropped} 帧（没变 / 没抽出来）。`);
+                if (v.diffReport) {
+                    const r = v.diffReport;
+                    const num = (n) => (r.judge === 'ssim' ? n.toFixed(3) : n.toFixed(1));
+                    lines.push(`差异分布（${r.judge === 'ssim' ? 'SSIM，越低越不同' : '平均像素差 0–255，越大越不同'}）：`
+                        + `P50 ${num(r.p50)} · P75 ${num(r.p75)} · P90 ${num(r.p90)} · 范围 ${num(r.min)}–${num(r.max)}（${r.pairs} 对）`);
+                }
+                if (v.note)
+                    lines.push(`注意：${v.note}`);
                 lines.push('静帧只能证明「这一秒长这样」；运动、声音、前后因果都不在里面。');
                 return text(lines.join('\n'));
             },

@@ -420,7 +420,7 @@ async function transcript(bvid, title, v, credential, read) {
 const SHOTS_KEEP = 40;
 const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000;
 /** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
-const SHOTS_CACHE_VERSION = 4;
+const SHOTS_CACHE_VERSION = 5;
 const FRAME_CONCURRENCY = 4;
 const FRAME_ATTEMPTS = 2;
 const MAX_CANDIDATES = 40;
@@ -579,6 +579,23 @@ async function pairScore(bin, a, b, ignoreBottom, tail, signal, parse) {
         return null;
     }
 }
+/** 相邻帧分数的分布：扫描阈值时一轮就能看清拐点大概在哪，不用逐个阈值试 */
+function diffStats(scores, judge, threshold) {
+    const vals = scores.filter((s) => s !== null && Number.isFinite(s)).sort((a, b) => a - b);
+    if (!vals.length)
+        return undefined;
+    const at = (q) => vals[Math.min(vals.length - 1, Math.max(0, Math.round((vals.length - 1) * q)))];
+    return {
+        judge,
+        pairs: vals.length,
+        p50: at(0.5),
+        p75: at(0.75),
+        p90: at(0.9),
+        min: vals[0],
+        max: vals[vals.length - 1],
+        threshold,
+    };
+}
 /**
  * 抽帧看画面：整条等间隔（grid）、指定时刻（at）、或区间密抽（range）。
  * 默认 3×3 九宫格；格号 + 时间码烧在每格顶部的黑边上（`1 12:30`），图离开终端也能对上字幕。
@@ -586,7 +603,8 @@ async function pairScore(bin, a, b, ignoreBottom, tail, signal, parse) {
  * 不落整段视频 —— 对直链按时间点远程 seek，只读需要的那几个字节范围。
  * 取帧 4 路并发；一帧失败重试一次，仍失败就留黑格并在 missingSec 里点名，
  * 不因为一格毁掉整张图。range + diff 时先密抽、再按 SSIM（或 --diff-threshold 的像素差）
- * 丢掉没变的帧；候选帧数超过 40 就自动降帧率（区间太长时会低于 1fps），不直接报错。
+ * 丢掉没变的帧；候选帧数超过 40 就自动降档，但不低于 1fps —— 1fps 仍塞不下就只取前 40 秒，
+ * 把原因和「range 该缩到多长」写进 note，不直接报错。--diff-report 再额外带回分数分布。
  * 帧数超过一张图的格数就出第二张 —— 宁可多一张，不把格子塞满。
  *
  * 同一 BV / page / 参数在 7 天内直接复用缓存（SHOTS_DIR 只留最近 40 张）。
@@ -618,29 +636,32 @@ export async function shots(opts) {
     if (opts.fps !== undefined && !range)
         throw new BiliError('usage', '--fps 只用于 --range');
     const mode = at ? 'at' : range ? 'range' : 'grid';
-    const fps = range && (opts.diff || opts.fps !== undefined) ? (opts.fps ?? 2) : undefined;
+    const fps = range && (opts.diff || opts.diffReport || opts.fps !== undefined) ? (opts.fps ?? 2) : undefined;
     if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) {
         throw new BiliError('usage', '--fps 要在 1–5 之间', '区间不长，2 帧/秒通常够了');
     }
-    // 实际用的帧率：区间太长时按 40 帧上限自动降下来（可以低于 1fps）
+    // 实际用的帧率：区间太长时按 40 帧上限自动降档 —— 但不会低于 1fps（理由见下面区间计划）
     let effFps = fps;
     let fpsClamped = false;
+    let note;
+    if (opts.diffReport && !range)
+        throw new BiliError('usage', '--diff-report 要配 --range', '先圈一段，再看相邻帧的差异分布');
     const ignoreBottom = opts.diffIgnoreBottom ?? 0;
     if (ignoreBottom !== 0) {
-        if (!opts.diff)
-            throw new BiliError('usage', '--diff-ignore-bottom 只配 --diff', '它只影响「画面变没变」的判断，不影响取帧');
+        if (!opts.diff && !opts.diffReport)
+            throw new BiliError('usage', '--diff-ignore-bottom 只配 --diff / --diff-report', '它只影响「画面变没变」的判断，不影响取帧');
         if (!Number.isFinite(ignoreBottom) || ignoreBottom <= 0 || ignoreBottom > 0.9) {
-            throw new BiliError('usage', '--diff-ignore-bottom 要在 0–0.9 之间', '按字幕实际占的高度给（常见 0.2–0.35）：0.15 只够窄字幕条');
+            throw new BiliError('usage', '--diff-ignore-bottom 要在 0–0.9 之间', '按字幕实际占的高度给（常见 0.25–0.35）：0.15 压不住字幕条');
         }
     }
     // 像素差判据（0–255 的平均差）：给了它就不用 SSIM —— 人物轻微晃动在 SSIM 上未必过得了
     // 阈值，但它真实存在（人物真的换了姿势），两种判据点不是一回事，只能选一个
     const diffThreshold = opts.diffThreshold;
     if (diffThreshold !== undefined) {
-        if (!opts.diff)
-            throw new BiliError('usage', '--diff-threshold 只配 --diff', '它只影响「画面变没变」的判断，不影响取帧');
+        if (!opts.diff && !opts.diffReport)
+            throw new BiliError('usage', '--diff-threshold 只配 --diff / --diff-report', '它只影响「画面变没变」的判断，不影响取帧');
         if (!Number.isFinite(diffThreshold) || diffThreshold <= 0 || diffThreshold > 64) {
-            throw new BiliError('usage', '--diff-threshold 要在 0–64 之间（0–255 的平均像素差）', '口播 / 白板类先试 6–8；配 --diff 用');
+            throw new BiliError('usage', '--diff-threshold 要在 0–64 之间（0–255 的平均像素差）', '先试 8，再看 --diff-report 的 P75 / P90 往上加（常见 12–20）');
         }
     }
     const crop = opts.crop;
@@ -664,6 +685,7 @@ export async function shots(opts) {
         diff: !!opts.diff,
         diffIgnoreBottom: ignoreBottom,
         diffThreshold: diffThreshold ?? 0,
+        diffReport: !!opts.diffReport,
         crop: crop ? crop.map((n) => n.toFixed(3)).join(',') : '',
     })).digest('hex');
     if (useCache) {
@@ -711,20 +733,34 @@ export async function shots(opts) {
             throw new BiliError('usage', `--range 超出可抽范围（00:00–${formatClock(span)}）`, '起点要早于终点，且落在视频里');
         }
         if (fps !== undefined) {
-            // 上限卡的是「候选帧数」，不是帧率：区间太长就自动降帧率（可以低于 1fps，即一格隔几秒），
-            // 而不是让调用方自己算。diff 之后往往只剩个位数，先抽满比直接报错有用。
+            // 上限卡的是「候选帧数」，不是帧率。降档分两种：
+            //  · 1fps 还塞得下 → 均匀降帧率（仍在 1–5 区间里），整段都覆盖；
+            //  · 1fps 都塞不下 → 保 1fps，只取区间前 40 秒（从尾部截断）。
+            //    整段均匀降采样（1.5 秒一帧）反而更容易漏掉半秒级的切点，
+            //    宁可少盖一截、把「range 该缩到多长」直接写进 note。
             const durSec = to - from;
-            const fitted = Math.min(fps, MAX_CANDIDATES / durSec);
-            if (fitted < fps) {
-                effFps = fitted;
+            const need = Math.ceil(fps * durSec);
+            if (need > MAX_CANDIDATES) {
                 fpsClamped = true;
+                effFps = Math.max(1, MAX_CANDIDATES / durSec);
             }
-            const step = 1 / fitted;
+            const step = 1 / effFps;
+            // 保 1fps 时只走到第 40 帧为止；区间够短就正常走到 to
+            const endSec = Math.min(to, from + MAX_CANDIDATES / effFps + 1e-6);
             const out = [];
-            for (let t = from + step / 2; t < to && out.length < MAX_CANDIDATES; t += step) {
+            for (let t = from + step / 2; t < endSec && out.length < MAX_CANDIDATES; t += step) {
                 out.push(Math.min(Math.max(0, to - 0.01), t));
             }
             planned = out;
+            if (fpsClamped) {
+                const capSec = Math.floor(MAX_CANDIDATES / fps);
+                note = effFps > 1
+                    ? `区间 ${formatClock(durSec)} 按 ${fps}fps 要 ${need} 帧，超 ${MAX_CANDIDATES} 帧上限：`
+                        + `已按 ${Number(effFps.toFixed(2))}fps 均匀抽 ${MAX_CANDIDATES} 帧`
+                    : `区间 ${formatClock(durSec)} 按 ${fps}fps 要 ${need} 帧，超 ${MAX_CANDIDATES} 帧上限：`
+                        + `已保持 1fps 只取前 ${MAX_CANDIDATES} 秒（${formatClock(from)}–${formatClock(endSec)}）；`
+                        + `建议把 range 缩到 ${capSec} 秒以内（${fps}fps × ${MAX_CANDIDATES} 帧）`;
+            }
         }
         else {
             planned = Array.from({ length: capacity }, (_, i) => Math.min(Math.max(0, to - 0.01), from + ((i + 0.5) * (to - from)) / capacity));
@@ -752,6 +788,7 @@ export async function shots(opts) {
         diffIgnoreBottom: ignoreBottom || undefined,
         diffThreshold,
         candidates: planned.length,
+        note,
     });
     // 格子尺寸跟画面（裁切后）比例走；竖屏就 360×640，裁一块就按裁切后的比例
     const dw = Number(v.dimension?.width) || 16;
@@ -826,22 +863,29 @@ export async function shots(opts) {
         // ── 去重：先密抽，再只留画面真的变过的帧；格号 / 时间码等选完再烧，免得文字差异干扰判据 ──
         let slots = [];
         let dropped;
+        let diffReport;
+        const usePixel = diffThreshold !== undefined;
+        const canScore = usePixel || caps.ssim;
+        let scores = [];
+        if ((opts.diff || opts.diffReport) && canScore && okFrames.length > 1) {
+            const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f]);
+            scores = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => (usePixel
+                ? pixelDelta(ff, a.file, b.file, ignoreBottom, opts.signal)
+                : ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal)));
+            if (opts.diffReport)
+                diffReport = diffStats(scores, usePixel ? 'pixel' : 'ssim', diffThreshold);
+        }
         if (opts.diff) {
             const keep = [okFrames[0]];
-            const usePixel = diffThreshold !== undefined;
-            if ((usePixel || caps.ssim) && okFrames.length > 1) {
-                const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f]);
-                const scores = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => (usePixel
-                    ? pixelDelta(ff, a.file, b.file, ignoreBottom, opts.signal)
-                    : ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal)));
-                pairs.forEach(([, b], i) => {
+            if (scores.length) {
+                okFrames.slice(1).forEach((b, i) => {
                     const v = scores[i];
                     // 算不出来（滤镜报错 / 解码失败）按「变了」处理，宁可多留一帧也别漏掉一段
                     if (v === null || (usePixel ? v > diffThreshold : v < DIFF_SSIM))
                         keep.push(b);
                 });
             }
-            else if (okFrames.length > 1) {
+            else {
                 keep.push(...okFrames.slice(1));
             }
             slots = keep.map((f) => ({ t: f.t, file: f.file }));
@@ -941,6 +985,8 @@ export async function shots(opts) {
             diff: opts.diff ? true : undefined,
             diffIgnoreBottom: ignoreBottom || undefined,
             diffThreshold,
+            diffReport,
+            note,
             candidates: effFps !== undefined ? planned.length : undefined,
             dropped,
             labels,

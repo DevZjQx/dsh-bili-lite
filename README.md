@@ -146,8 +146,10 @@ bun src/features/bili-agent/bili.ts shots <BV> --at 03:20,05:10             # �
 bun src/features/bili-agent/bili.ts shots <BV> --range 02:10-02:35 --fps 2 --diff  # 区间密抽，只留变化帧
 bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-ignore-bottom 0.3
                                                      # 口播 / 白板：字幕带不算画面变
-bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-threshold 6
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-threshold 12
                                                      # 人物轻微晃动 / 噪点不算画面变
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:50-03:10 --fps 2 --diff --diff-report
+                                                     # 打一张分数分布，先看 P75 / P90 再定阈值
 bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid 2x2  # 裁一块看卡片 / 角落
 ```
 
@@ -157,14 +159,19 @@ bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid
   图离开终端也能对上字幕；同一秒里有多帧时带十分之一秒（`00:12.3`）。
 - **先扫后定位**：3×3 看结构，`--at` / `--range` 看具体那一段；`--diff` 只留画面真的变过的帧，
   帧数超过一张图的格数就多出几张图（按格数平均分、缺的格补黑），不硬塞。
-- **候选 40 帧封顶，超了自动降帧率**：`--fps` 只是想要的速度，区间太长就按 40 帧反算（10 分钟大概 0.07fps），
-  终端会写「从 2fps 降下来的」；不报错、也不让你自己算。
+- **候选 40 帧封顶，超了自动降档**：`--fps` 只是想要的速度。区间长到 1fps 也塞不下时，不把帧率压到 1 以下
+  （1.5 秒一帧反而更容易漏掉半秒切点），而是**保持 1fps、只取区间前 40 秒**，`note` 里写清原因并建议
+  `range` 缩到多长（例如 2fps → 20 秒以内）；1fps 仍塞得下时只是均匀降帧率。两种情况都不报错。
 - **`--diff` 对字幕不设防**：口播 / 白板类视频画面不动、字幕整行重绘，相邻帧 SSIM 约 0.98（阈值 0.985），
-  会被当成「变了」。`--diff-ignore-bottom` 把底部字幕带整条排除，**高度按字幕实际占多高给（常见 0.2–0.35，
-  0.15 只够窄字幕条）**。同一对帧裁完回到 1.00，真换一张卡片仍有 0.96。
-- **两种判据，各管一摊**：默认 SSIM（看结构）；`--diff-threshold 6` 换成平均像素差（0–255，由 PSNR 换算）——
+  会被当成「变了」。`--diff-ignore-bottom` 把底部字幕带整条排除，**高度按字幕实际占多高给（常见 0.25–0.35；
+  0.15 压不住，字幕条通常落在画面高度 0.78–0.94 那一截）**。同一对帧裁完回到 1.00，真换一张卡片仍有 0.96。
+- **两种判据，各管一摊**：默认 SSIM（看结构）；`--diff-threshold` 换成平均像素差（0–255，由 PSNR 换算）——
   SSIM 对「人没换姿势、全身在微微动」很敏感，像素差对这种微动更钝，对「整块换色」反而更灵
   （色度也算进去）。给了它就不再走 SSIM。
+- **阈值别从 6 起**：实测 6 基本无效（40 帧里还留 36 帧），8 仍有成片重复，可用区间是 12–20。
+  先 `--diff-threshold 8` 看还剩下多少重复，再往 12 / 16 / 20 加，直到数量接近你数出来的镜头数。
+- **`--diff-report` 一轮定阈值**：把相邻候选帧的差异分数打出来（P50 / P75 / P90 + 极值），
+  像素差挑落在 P75–P90 之间的值通常就是切点；单独给时只报告、不筛帧，不用为每个阈值各跑一遍。
 - **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
 - **缓存与清理**：同一 BV / page / 参数 7 天内复用；`shots/` 只留最近 40 张（`--out` 指定的目录不参与清理）。
 - **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，
