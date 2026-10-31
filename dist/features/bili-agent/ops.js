@@ -82,7 +82,10 @@ const flowText = (texts) => texts.reduce((acc, t) => {
     return acc + (cjk ? '' : ' ') + t;
 }, '');
 /**
- * 今天的候选：关键词搜索（它自己给）→ 关注动态 → 热门，谁有谁上，凑够 n 条为止。
+ * 今天的候选：关键词搜索（它自己给）→ 关注动态（最多占一半槽位）→ 热门，谁有谁上，凑够 n 条为止。
+ *
+ * 关注动态封顶是因为它是唯一能一次端回 20 条的支路：不限量的话它自己就把 n 填满，
+ * 热门那一路连请求都发不出去（③ 只在 pool.length < n 时跑），久而久之只剩熟人推荐。
  *
  * 三条支路互不牵连：一条挂了只记 note，其余照给。理由是抖动是常态 ——
  * 关注动态缺 buvid3 必被 -352 拦，热门偶尔超时，为这些让整次「今天看什么」失败
@@ -93,6 +96,8 @@ export async function feed(opts = {}) {
     const wanted = Number(opts.limit ?? 5);
     const n = clamp(Math.trunc(Number.isFinite(wanted) ? wanted : 5), 1, 10);
     const keywords = (opts.keywords ?? []).map((s) => String(s).trim()).filter(Boolean).slice(0, 3);
+    /** 关注动态最多占多少个槽位（n=1 时仍是 1，只有它一路可给） */
+    const followCap = Math.ceil(n / 2);
     const credential = cred();
     const seen = seenSet();
     const notes = [];
@@ -132,7 +137,7 @@ export async function feed(opts = {}) {
         if (pool.length >= n * 3)
             break;
     }
-    // ② 关注动态：关注是它自己做的决定，这里只把结果端上来
+    // ② 关注动态：关注是它自己做的决定，但只让它占一半 —— 全给它，热门就永远轮不上
     if (pool.length < n) {
         if (!credential.buvid3) {
             notes.push('关注动态跳过：cookie 里没有 buvid3 —— 去设置页重抄一次 cookie；这轮先靠搜索 / 热门');
@@ -142,6 +147,8 @@ export async function feed(opts = {}) {
             try {
                 const items = await getFollowingFeed(credential);
                 for (const it of items) {
+                    if (pool.length - before >= followCap)
+                        break;
                     const a = it.modules?.module_dynamic?.major?.archive;
                     if (!a?.bvid)
                         continue;

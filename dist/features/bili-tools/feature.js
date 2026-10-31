@@ -115,7 +115,7 @@ function drafts() {
         // ── 今天看什么 ──
         {
             name: 'bili_feed',
-            description: '今天的候选视频（已排除你看过的）：给关键词就搜，然后关注动态补，再不够用热门补。'
+            description: '今天的候选视频（已排除你看过的）：给关键词就搜，然后关注动态补（最多占一半），剩下的用热门补。'
                 + '只读。拿到 BV 号后用 bili_video 看懂一条再决定要不要说话。',
             parameters: params({
                 limit: num('要几条（1–10，默认 5）'),

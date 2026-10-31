@@ -33,7 +33,7 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   selftest                启动自检（装完先跑这个）
   login                   扫码登录（手机 B 站 App 扫码，免手抄 cookie）
   whoami                  cookie 是哪个号
-  feed [--n 5] [--kw 词,词]  今天的候选（关注动态 + 搜索 + 热门；只读；--kw 由你自己定）
+  feed [--n 5] [--kw 词,词]  今天的候选（搜索 + 关注动态（最多一半）+ 热门；只读；--kw 由你自己定）
   up <mid|名字|空间链接> [--n 20] [--page 1] [--order pubdate|click|stow]
                           看某位 UP 的投稿列表（只读）；mid 从 video <BV> 的输出里抄，
                           也可以直接写 TA 的名字（按名字搜一次人）
