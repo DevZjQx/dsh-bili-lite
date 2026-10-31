@@ -420,7 +420,7 @@ async function transcript(bvid, title, v, credential, read) {
 const SHOTS_KEEP = 40;
 const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000;
 /** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
-const SHOTS_CACHE_VERSION = 3;
+const SHOTS_CACHE_VERSION = 4;
 const FRAME_CONCURRENCY = 4;
 const FRAME_ATTEMPTS = 2;
 const MAX_CANDIDATES = 40;
@@ -460,11 +460,24 @@ const filterQuote = (s) => `'${s.replace(/\\/g, '/').replace(/:/g, '\\:').replac
  * 只画格号 + 时间码的滤镜（裁切 / 缩放已经在取帧时做过了）。
  * 格号跟这张图的行序号一致：图会进日记 / 笔记、以后还会被重读，
  * 没有格号就只能靠"每张图重新数"，脱离了这次的终端输出就对不上。
+ *
+ * 字画在格子顶部的黑边上（取帧时就 pad 出来了），不压画面 —— 裁切之后左上角
+ * 往往正是要看的那块内容，压上去就没法看了。
  */
-function labelVf(font, cellNo, sec, cw) {
+const LABEL_MARGIN = 3;
+/**
+ * 格号条的高度与字号：都跟着格子宽度走，宁可小一点也别占掉太多画面。
+ * 高度 ≈ ascent + descent（Noto CJK 约 1.48 倍字号）+ 上下留白；
+ * 黑边本身就是底色，所以不画 drawtext 的 box，省下一圈边距。
+ * 字号沿用原来压在画面上的那档（cw/24）—— 拼图会被看图工具缩放，再小就看不清了。
+ */
+function labelMetrics(cw) {
     const size = Math.max(14, Math.round(cw / 24));
+    return { size, height: even(Math.ceil(size * 1.55) + 2 * LABEL_MARGIN) };
+}
+function labelVf(font, cellNo, sec, size) {
     const text = `${cellNo} ${formatClockFine(sec)}`.replace(/:/g, '\\:');
-    return `drawtext=fontfile=${filterQuote(font)}:text='${text}':x=8:y=8:fontsize=${size}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=6`;
+    return `drawtext=fontfile=${filterQuote(font)}:text='${text}':x=8:y=${LABEL_MARGIN}:fontsize=${size}:fontcolor=white`;
 }
 function shotsCacheFile(key) {
     return path.join(SHOTS_DIR, '.cache', `${key}.json`);
@@ -524,12 +537,22 @@ function pruneShots() {
     }
     catch { /* 清理失败不影响抽帧 */ }
 }
-/** 两帧像不像（SSIM，1 = 一样）；算不出来返回 null（调用方当作「变了」） */
-async function ssimScore(bin, a, b, signal) {
+/**
+ * 两帧像不像（SSIM，1 = 一样）；算不出来返回 null（调用方当作「变了」）。
+ * ignoreBottom > 0 时两边一起裁掉底部那条（字幕区）：口播 / 白板类视频里字幕整行重绘
+ * 能把 SSIM 压到 0.98 上下（阈值 0.985，够不够全看字幕多长），裁掉之后同样的两帧回到
+ * 1.0，而真换一张卡片仍然只有 0.96 —— 判据要的是后者。
+ */
+async function ssimScore(bin, a, b, ignoreBottom, signal) {
+    const keep = 1 - Math.max(0, Math.min(0.9, ignoreBottom));
+    const vf = keep < 1
+        ? `[0:v]crop=iw:trunc(ih*${keep.toFixed(4)}/2)*2:0:0,setsar=1[x];`
+            + `[1:v]crop=iw:trunc(ih*${keep.toFixed(4)}/2)*2:0:0,setsar=1[y];[x][y]ssim`
+        : 'ssim';
     try {
         const r = await runFfmpegAsync(bin, [
             '-nostdin', '-hide_banner', '-loglevel', 'info', '-nostats',
-            '-i', a, '-i', b, '-lavfi', 'ssim', '-f', 'null', '-',
+            '-i', a, '-i', b, '-lavfi', vf, '-f', 'null', '-',
         ], { timeout: 30_000, signal });
         const m = /All:([0-9.]+)/.exec(r.stderr);
         return m ? Number(m[1]) : null;
@@ -542,7 +565,7 @@ async function ssimScore(bin, a, b, signal) {
 }
 /**
  * 抽帧看画面：整条等间隔（grid）、指定时刻（at）、或区间密抽（range）。
- * 默认 3×3 九宫格；格号 + 时间码烧在每格左上角（`1 12:30`），图离开终端也能对上字幕。
+ * 默认 3×3 九宫格；格号 + 时间码烧在每格顶部的黑边上（`1 12:30`），图离开终端也能对上字幕。
  *
  * 不落整段视频 —— 对直链按时间点远程 seek，只读需要的那几个字节范围。
  * 取帧 4 路并发；一帧失败重试一次，仍失败就留黑格并在 missingSec 里点名，
@@ -582,6 +605,14 @@ export async function shots(opts) {
     if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) {
         throw new BiliError('usage', '--fps 要在 1–5 之间', '区间不长，2 帧/秒通常够了');
     }
+    const ignoreBottom = opts.diffIgnoreBottom ?? 0;
+    if (ignoreBottom !== 0) {
+        if (!opts.diff)
+            throw new BiliError('usage', '--diff-ignore-bottom 只配 --diff', '它只影响「画面变没变」的判断，不影响取帧');
+        if (!Number.isFinite(ignoreBottom) || ignoreBottom <= 0 || ignoreBottom > 0.9) {
+            throw new BiliError('usage', '--diff-ignore-bottom 要在 0–0.9 之间', '0.15 = 忽略画面最下面 15%（字幕常在那）');
+        }
+    }
     const crop = opts.crop;
     if (crop) {
         const [x, y, w, h] = crop;
@@ -601,6 +632,7 @@ export async function shots(opts) {
         range: range ? `${range.fromSec.toFixed(2)}-${range.toSec.toFixed(2)}` : '',
         fps: fps ?? 0,
         diff: !!opts.diff,
+        diffIgnoreBottom: ignoreBottom,
         crop: crop ? crop.map((n) => n.toFixed(3)).join(',') : '',
     })).digest('hex');
     if (useCache) {
@@ -653,7 +685,14 @@ export async function shots(opts) {
             for (let t = from + step / 2; t < to; t += step)
                 out.push(Math.min(Math.max(0, to - 0.01), t));
             if (out.length > MAX_CANDIDATES) {
-                throw new BiliError('usage', `区间 ${formatClock(from)}–${formatClock(to)} × ${fps}fps = ${out.length} 帧，超过 ${MAX_CANDIDATES} 上限`, '缩小区间或降 --fps');
+                // 上限是「候选帧数」，所以把两条出路都算成具体数：帧率降到多少，或区间缩到几秒
+                const durSec = to - from;
+                const maxFps = MAX_CANDIDATES / durSec;
+                const maxSec = Math.floor(MAX_CANDIDATES / fps);
+                const hint = maxFps >= 1
+                    ? `降到 ${Number(maxFps.toFixed(1))}fps 以内，或把区间缩到 ${maxSec} 秒以内（现在 ${Math.round(durSec)} 秒）`
+                    : `这段就算 1fps 也要 ${Math.ceil(durSec)} 帧 —— 把区间缩到 ${maxSec} 秒以内，或改用 --at 点几个时刻`;
+                throw new BiliError('usage', `区间 ${formatClock(from)}–${formatClock(to)}（${Math.round(durSec)} 秒）× ${fps}fps = ${out.length} 帧，超过 ${MAX_CANDIDATES} 帧上限`, hint);
             }
             planned = out;
         }
@@ -679,6 +718,7 @@ export async function shots(opts) {
         range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
         fps,
         diff: !!opts.diff,
+        diffIgnoreBottom: ignoreBottom || undefined,
         candidates: planned.length,
     });
     // 格子尺寸跟画面（裁切后）比例走；竖屏就 360×640，裁一块就按裁切后的比例
@@ -688,20 +728,24 @@ export async function shots(opts) {
     const base = 640;
     const cw = even(ar >= 1 ? base : base * ar);
     const ch = even(ar >= 1 ? base / ar : base);
+    // 格号条在取帧时就 pad 出来：这样画字成不成功，每格尺寸都一样（拼图要求等大），
+    // 画上去也只占黑边，不压画面
+    const caps = ffmpegCaps(ff);
+    const font = caps.drawtext ? findFfmpegFont() : null;
+    let labels = !!font;
+    const label = labels && font ? labelMetrics(cw) : null;
+    const chp = ch + (label?.height ?? 0);
     const scalePad = [
         ...(crop
             ? [`crop=trunc(iw*${crop[2].toFixed(4)}/2)*2:trunc(ih*${crop[3].toFixed(4)}/2)*2:trunc(iw*${crop[0].toFixed(4)}/2)*2:trunc(ih*${crop[1].toFixed(4)}/2)*2`]
             : []),
         `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos`,
-        `pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2:color=black`,
+        `pad=${cw}:${chp}:(ow-iw)/2:${label ? label.height : '(oh-ih)/2'}:color=black`,
     ].join(',');
     const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`;
     const outDir = opts.outDir ? path.resolve(opts.outDir) : SHOTS_DIR;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
     const stem = `${bvid}${p > 1 ? `-p${p}` : ''}-${stamp}-${cols}x${rows}`;
-    const caps = ffmpegCaps(ff);
-    const font = caps.drawtext ? findFfmpegFont() : null;
-    let labels = !!font;
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-shots-'));
     try {
         // ── 取帧（4 路并发；一帧失败重试一次，仍失败就留黑格）──
@@ -751,7 +795,7 @@ export async function shots(opts) {
             const keep = [okFrames[0]];
             if (caps.ssim && okFrames.length > 1) {
                 const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f]);
-                const sims = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => ssimScore(ff, a.file, b.file, opts.signal));
+                const sims = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => ssimScore(ff, a.file, b.file, ignoreBottom, opts.signal));
                 pairs.forEach(([, b], i) => {
                     const sim = sims[i];
                     if (sim === null || sim < DIFF_SSIM)
@@ -785,7 +829,7 @@ export async function shots(opts) {
                 start += size;
             }
         }
-        if (labels && font) {
+        if (labels && font && label) {
             let labelFailed = false;
             const labelDir = path.join(tmp, 'label');
             fs.mkdirSync(labelDir, { recursive: true });
@@ -796,7 +840,7 @@ export async function shots(opts) {
                 try {
                     await runFfmpegAsync(ff, [
                         '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-                        '-i', s.file, '-frames:v', '1', '-vf', labelVf(font, cellNo[i], s.t, cw), '-q:v', '2', dst,
+                        '-i', s.file, '-frames:v', '1', '-vf', labelVf(font, cellNo[i], s.t, label.size), '-q:v', '2', dst,
                     ], { timeout: 30_000, signal: opts.signal });
                     if (fs.existsSync(dst) && fs.statSync(dst).size >= 1000)
                         return { t: s.t, file: dst };
@@ -815,7 +859,7 @@ export async function shots(opts) {
         const black = path.join(tmp, 'black.jpg');
         await runFfmpegAsync(ff, [
             '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-            '-f', 'lavfi', '-i', `color=c=black:s=${cw}x${ch}:d=1`,
+            '-f', 'lavfi', '-i', `color=c=black:s=${cw}x${chp}:d=1`,
             '-frames:v', '1', '-q:v', '2', black,
         ], { timeout: 30_000, signal: opts.signal });
         const sheets = [];
@@ -847,12 +891,15 @@ export async function shots(opts) {
             cols,
             rows,
             cellWidth: cw,
-            cellHeight: ch,
+            /** 含顶部格号条（没有格号条时 = 画面高） */
+            cellHeight: chp,
+            labelHeight: label?.height,
             timesSec: sheets.flatMap((s) => s.timesSec),
             mode,
             range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
             fps,
             diff: opts.diff ? true : undefined,
+            diffIgnoreBottom: ignoreBottom || undefined,
             candidates: fps !== undefined ? planned.length : undefined,
             dropped,
             labels,

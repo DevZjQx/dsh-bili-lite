@@ -52,9 +52,11 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
   shots <BV> [--grid 3x3] [--p 1] [--out 目录] [--at 03:20,05:10]
-        [--range 02:10-02:35 [--fps 2] [--diff]] [--crop x,y,w,h]
+        [--range 02:10-02:35 [--fps 2] [--diff [--diff-ignore-bottom 0.15]]]
+        [--crop x,y,w,h]
                           抽帧看画面：整条等间隔 / 指定时刻 / 区间密抽只留变化帧；
-                          格号 + 时间码烧在格子上，帧多就多出几张图（需要 ffmpeg，可选）
+                          格号 + 时间码烧在格子顶部黑边上（不压画面），帧多就多出几张图（需要 ffmpeg，可选）；
+                          口播 / 白板视频字幕一直在变，--diff-ignore-bottom 把字幕带排除
   comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
                           发一条评论；--reply 回某一条评论（rpid 从 inbox 里抄），
                           --root 只回楼中楼时才要（顶层评论不用填）
@@ -354,7 +356,8 @@ const QN_TEXT: Record<number, string> = { 16: '360P', 32: '480P', 64: '720P', 74
 export async function cmdShots(flags: Flags, positional: string[]): Promise<void> {
   const bvid = String(positional[0] ?? '')
   const usage = '用法: bun bili.ts shots <BV号> [--grid 3x3] [--p 1] [--out 目录]\n'
-    + '      [--at 03:20,05:10] [--range 02:10-02:35 [--fps 2] [--diff]] [--crop 0.62,0.06,0.36,0.30]'
+    + '      [--at 03:20,05:10] [--range 02:10-02:35 [--fps 2] [--diff [--diff-ignore-bottom 0.15]]]\n'
+    + '      [--crop 0.62,0.06,0.36,0.30]'
   if (!BV_RE.test(bvid)) { console.error(usage); process.exit(2) }
   const grid = String(flags.get('grid') ?? '3x3')
   const m = /^(\d)x(\d)$/.exec(grid)
@@ -378,6 +381,11 @@ export async function cmdShots(flags: Flags, positional: string[]): Promise<void
   const fps = fpsRaw !== undefined ? Number(fpsRaw) : undefined
   if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) { console.error('--fps 要在 1–5 之间'); process.exit(2) }
   const diff = flags.has('diff')
+  const ignoreRaw = flags.get('diff-ignore-bottom')
+  const ignoreBottom = ignoreRaw !== undefined ? Number(ignoreRaw) : undefined
+  if (ignoreBottom !== undefined && (!Number.isFinite(ignoreBottom) || ignoreBottom <= 0 || ignoreBottom > 0.9)) {
+    console.error('--diff-ignore-bottom 要在 0–0.9 之间（0.15 = 忽略画面最下面 15%，字幕常在那）'); process.exit(2)
+  }
 
   const res = await shots({
     bvid,
@@ -388,6 +396,7 @@ export async function cmdShots(flags: Flags, positional: string[]): Promise<void
     range,
     fps,
     diff,
+    diffIgnoreBottom: ignoreBottom,
     crop,
     progress: (p) => {
       if (p.stage === 'frame') { process.stdout.write(`  抽帧 ${p.done}/${p.total} ✓\r`); return }
@@ -405,7 +414,10 @@ export async function cmdShots(flags: Flags, positional: string[]): Promise<void
       const qual = `${QN_TEXT[p.quality ?? 0] ?? p.quality}`
       const seg = p.segments > 1 ? `（分 ${p.segments} 段，只抽前 ${fmtDur(Math.round(p.spanSec))}）` : ''
       console.log(`UP: ${p.up}   时长: ${fmtDur(p.durationSec)}${p.page > 1 ? `   第 ${p.page} P` : ''}   画质: ${qual}${seg}`)
-      if (p.mode === 'range' && p.fps) console.log(`候选: ${p.candidates} 帧（${p.fps}fps）${p.diff ? '，按画面变化筛选' : ''}`)
+      if (p.mode === 'range' && p.fps) {
+        const ignore = p.diffIgnoreBottom ? `（忽略底部 ${Math.round(p.diffIgnoreBottom * 100)}%）` : ''
+        console.log(`候选: ${p.candidates} 帧（${p.fps}fps）${p.diff ? `，按画面变化筛选${ignore}` : ''}`)
+      }
       else console.log(`时间点: ${p.times.map((t, i) => `${i + 1}=${formatClockFine(t)}`).join('  ')}`)
     },
   })
@@ -416,11 +428,13 @@ export async function cmdShots(flags: Flags, positional: string[]): Promise<void
     console.log(`  ${i + 1}. ${sh.path}`)
     console.log(`     时间码: ${sh.timesSec.map((t, j) => `${j + 1}=${formatClockFine(t)}`).join('  ')}`)
   }
-  console.log(`  一格 ${res.cellWidth}×${res.cellHeight}，按行读（格号 1 左上 → ${res.cols * res.rows} 右下）；把路径交给看图工具 ✓`)
+  const strip = res.labelHeight ? `（顶部 ${res.labelHeight}px 是格号条，不压画面）` : ''
+  console.log(`  一格 ${res.cellWidth}×${res.cellHeight}${strip}，按行读（格号 1 左上 → ${res.cols * res.rows} 右下）；把路径交给看图工具 ✓`)
   if (!res.labels) console.log('  图上没烧格号 / 时间码（没找到字体 / ffmpeg 没 drawtext）—— 按上面的时间码对照')
   if (res.missingSec.length) console.log(`  有 ${res.missingSec.length} 帧没抽出来：${res.missingSec.map((t) => formatClockFine(t)).join(' ')}`)
   if (res.cached) console.log('  复用缓存（同一 BV / 参数 7 天内不重抽）')
   console.log('  看不清就 --grid 4x4、--crop 裁一块；想看某段就 --range 02:10-02:25 --fps 2 --diff')
+  console.log('  口播 / 白板类（画面不动、字幕在变）再加 --diff-ignore-bottom 0.15，否则留下的多半是同屏字幕')
 }
 
 // ── 收件箱（谁 @ 了你 / 谁回了你）─────────────────────────────────────────

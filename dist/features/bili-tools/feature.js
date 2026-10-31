@@ -355,8 +355,8 @@ function drafts() {
         // ── 抽帧看画面 ──
         {
             name: 'bili_shots',
-            description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧）。'
-                + '格号 + 时间码烧在每格左上角（如「3 12:30」），返回图片绝对路径 —— 还要用看图工具读。'
+            description: '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧，diffIgnoreBottom 可跳过底部字幕带）。'
+                + '格号 + 时间码烧在每格顶部的黑边上（如「3 12:30」，不压画面），返回图片绝对路径 —— 还要用看图工具读。'
                 + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
             parameters: params({
                 bvid: str('BV 号'),
@@ -366,6 +366,7 @@ function drafts() {
                 range: str('只抽这一段：mm:ss-mm:ss（如 02:10-02:35）；可与 fps / diff 同用'),
                 fps: num('区间密抽帧率 1–5（只配 range；给 diff 时默认 2）'),
                 diff: bool('区间密抽后只留画面真的变过的帧（配 range 用）'),
+                diffIgnoreBottom: num('diff 时忽略底部这一条（0–0.9，占画面高度）：口播 / 白板视频字幕一直在变，给 0.15 就不算画面变化'),
                 crop: str('裁一块看细节：x,y,w,h 为 0–1 相对坐标（如 0.62,0.06,0.36,0.30）'),
             }, ['bvid']),
             schema: obj({
@@ -382,11 +383,13 @@ function drafts() {
                 rows: { type: 'number' },
                 cellWidth: { type: 'number' },
                 cellHeight: { type: 'number' },
+                labelHeight: { type: 'number' },
                 timesSec: arr('所有选中帧的时间点（秒，跨图展平）', { type: 'number' }),
                 mode: oneOf('抽帧方式', ['grid', 'at', 'range']),
                 range: obj({ fromSec: { type: 'number' }, toSec: { type: 'number' } }, ['fromSec', 'toSec']),
                 fps: { type: 'number' },
                 diff: { type: 'boolean' },
+                diffIgnoreBottom: { type: 'number' },
                 candidates: { type: 'number' },
                 dropped: { type: 'number' },
                 labels: { type: 'boolean' },
@@ -425,6 +428,7 @@ function drafts() {
                         range,
                         fps: asNum(a.fps),
                         diff: asBool(a.diff),
+                        diffIgnoreBottom: asNum(a.diffIgnoreBottom),
                         crop,
                         signal: exec.signal,
                     });
@@ -435,13 +439,14 @@ function drafts() {
             },
             render(_args, value) {
                 const v = value;
+                const ignore = v.diffIgnoreBottom ? `（忽略底部 ${Math.round(v.diffIgnoreBottom * 100)}%）` : '';
                 const count = v.sheets.reduce((n, s) => n + s.timesSec.length, 0);
                 const clock = formatClockFine;
                 const modeText = v.mode === 'grid'
                     ? `等间隔 ${v.cols * v.rows} 帧`
                     : v.mode === 'at'
                         ? `指定 ${count} 个时间点`
-                        : `区间 ${formatClockFine(v.range?.fromSec ?? 0)}–${formatClockFine(v.range?.toSec ?? 0)}${v.fps ? ` · ${v.fps}fps 密抽` : ''}${v.diff ? ` → 留变化 ${count} 帧` : ''}`;
+                        : `区间 ${formatClockFine(v.range?.fromSec ?? 0)}–${formatClockFine(v.range?.toSec ?? 0)}${v.fps ? ` · ${v.fps}fps 密抽` : ''}${v.diff ? ` → 留变化 ${count} 帧${ignore}` : ''}`;
                 const head = v.paths.length > 1
                     ? `《${v.title}》${modeText}${v.cached ? '（复用缓存）' : ''} → ${v.paths.length} 张`
                     : `《${v.title}》${modeText} → ${v.paths[0]}${v.cached ? '（复用缓存）' : ''}`;
@@ -451,7 +456,8 @@ function drafts() {
                         lines.push(`第 ${i + 1} 张：${sh.path}`);
                     lines.push(`时间码：${sh.timesSec.map((t, j) => `${j + 1}=${clock(t)}`).join(' · ')}`);
                 }
-                lines.push(`一格 ${v.cellWidth}×${v.cellHeight}，按行读（每张图从 1 重新数）；用看图工具读路径。`);
+                const strip = v.labelHeight ? `（顶部 ${v.labelHeight}px 是格号条，不压画面）` : '';
+                lines.push(`一格 ${v.cellWidth}×${v.cellHeight}${strip}，按行读（每张图从 1 重新数）；用看图工具读路径。`);
                 if (!v.labels)
                     lines.push('图上没烧格号 / 时间码（缺字体 / drawtext），按上面的时间码对照。');
                 if (v.missingSec.length)
