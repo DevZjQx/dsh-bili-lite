@@ -9,6 +9,7 @@ import { CFG_FILE, CRED_FILE, DATA_DIR, SCHEDULE_FILE } from '../../config/paths
 import { apiGet, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, getPlayerInfo, getView } from '../../lib/bilibili.js';
 import { ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
+import { parseClockList, parseClockRange, parseCrop, formatClockFine } from '../../lib/timecode.js';
 import { feed, up, following, video, shots, inbox, history, schedule, comment, interact, BiliError } from './ops.js';
 import { readPlan, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN, DEFAULT_FOR_DAYS, MAX_FOR_DAYS } from '../../lib/schedule.js';
 // ── 小工具 ─────────────────────────────────────────────────────────────────
@@ -41,9 +42,10 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   video <BV> [--read 全文|mm:ss-mm:ss]
                           看懂一条：概览 = 简介/章节/字幕试读/弹幕热词/热评（只读）；
                           --read 深读字幕全文或某一段（不截断，读多深自己定）
-  shots <BV> [--grid 3x3] [--p 1] [--out 目录]
-                          抽帧九宫格：等间隔抽 N 帧拼一张图（默认 3×3），拿路径去看画面
-                          （需要 ffmpeg；没装就只这一条用不了，其余照常）
+  shots <BV> [--grid 3x3] [--p 1] [--out 目录] [--at 03:20,05:10]
+        [--range 02:10-02:35 [--fps 2] [--diff]] [--crop x,y,w,h]
+                          抽帧看画面：整条等间隔 / 指定时刻 / 区间密抽只留变化帧；
+                          格号 + 时间码烧在格子上，帧多就多出几张图（需要 ffmpeg，可选）
   comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
                           发一条评论；--reply 回某一条评论（rpid 从 inbox 里抄），
                           --root 只回楼中楼时才要（顶层评论不用填）
@@ -384,14 +386,16 @@ function parseReadArg(arg) {
     }
     return { mode: 'range', fromSec: from, toSec: to };
 }
-// ── shots：抽帧九宫格（等间隔 N 帧拼一张图，补上「字幕之外」的画面）──────────────
+// ── shots：抽帧看画面（整条等间隔 / 指定时刻 / 区间密抽去重）──────────────────
 // 依赖 ffmpeg（可选）：直接把 B 站直链喂给它，按 `-ss` 远程 seek 各取一帧，最后 tile 拼图。
-// 不落整段视频 —— 长视频也只按需读几个字节范围，磁盘和内存都不受视频长度影响。
+// 不落整段视频 —— 长视频也只按需读几个字节范围；时间码烧在格子上，选帧/去重在 ops。
 const QN_TEXT = { 16: '360P', 32: '480P', 64: '720P', 74: '720P60', 80: '1080P', 112: '1080P+', 116: '1080P60', 120: '4K' };
 export async function cmdShots(flags, positional) {
     const bvid = String(positional[0] ?? '');
+    const usage = '用法: bun bili.ts shots <BV号> [--grid 3x3] [--p 1] [--out 目录]\n'
+        + '      [--at 03:20,05:10] [--range 02:10-02:35 [--fps 2] [--diff]] [--crop 0.62,0.06,0.36,0.30]';
     if (!BV_RE.test(bvid)) {
-        console.error('用法: bun bili.ts shots <BV号> [--grid 3x3] [--p 1] [--out 目录]');
+        console.error(usage);
         process.exit(2);
     }
     const grid = String(flags.get('grid') ?? '3x3');
@@ -401,27 +405,90 @@ export async function cmdShots(flags, positional) {
         console.error('--grid 要写成 3x3 / 4x4 这样（每边 1–6 格）');
         process.exit(2);
     }
+    const atArg = flags.get('at');
+    const rangeArg = flags.get('range');
+    if (atArg !== undefined && rangeArg !== undefined) {
+        console.error('--at 和 --range 只能给一个');
+        process.exit(2);
+    }
+    const atParsed = atArg !== undefined ? parseClockList(String(atArg)) : undefined;
+    if (atArg !== undefined && !atParsed) {
+        console.error('--at 要写成 03:20,05:10（也认秒数 200,310）');
+        process.exit(2);
+    }
+    const at = atParsed ?? undefined;
+    const rangeParsed = rangeArg !== undefined ? parseClockRange(String(rangeArg)) : undefined;
+    if (rangeArg !== undefined && !rangeParsed) {
+        console.error('--range 要写成 02:10-02:35（也认秒数 130-155）');
+        process.exit(2);
+    }
+    const range = rangeParsed ?? undefined;
+    const cropArg = flags.get('crop');
+    const cropParsed = cropArg !== undefined ? parseCrop(String(cropArg)) : undefined;
+    if (cropArg !== undefined && !cropParsed) {
+        console.error('--crop 要写成 x,y,w,h（0–1 相对坐标），如 0.62,0.06,0.36,0.30');
+        process.exit(2);
+    }
+    const crop = cropParsed ?? undefined;
+    const fpsRaw = flags.get('fps');
+    const fps = fpsRaw !== undefined ? Number(fpsRaw) : undefined;
+    if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) {
+        console.error('--fps 要在 1–5 之间');
+        process.exit(2);
+    }
+    const diff = flags.has('diff');
     const res = await shots({
         bvid,
         grid,
         page: Number(flags.get('p') ?? 1),
         outDir: String(flags.get('out') ?? '') ? String(flags.get('out')) : undefined,
+        at,
+        range,
+        fps,
+        diff,
+        crop,
         progress: (p) => {
             if (p.stage === 'frame') {
                 process.stdout.write(`  抽帧 ${p.done}/${p.total} ✓\r`);
                 return;
             }
-            console.log(`=== 《${p.title}》抽帧 ${cols}×${rows} ===`);
+            if (p.stage === 'select') {
+                process.stdout.write(' '.repeat(28) + '\r');
+                console.log(`  去重：${p.candidates} 帧 → 留 ${p.kept} 帧（丢 ${p.dropped}${p.missing ? `，其中 ${p.missing} 帧没抽出来` : ''}）`);
+                return;
+            }
+            const modeText = p.mode === 'grid'
+                ? '等间隔'
+                : p.mode === 'at'
+                    ? `指定 ${p.times.length} 个时间点`
+                    : `区间 ${fmtDur(Math.round(p.range.fromSec))}–${fmtDur(Math.round(p.range.toSec))}${p.fps ? ` · ${p.fps}fps 密抽` : ''}`;
+            console.log(`=== 《${p.title}》抽帧 ${cols}×${rows} · ${modeText} ===`);
             const qual = `${QN_TEXT[p.quality ?? 0] ?? p.quality}`;
             const seg = p.segments > 1 ? `（分 ${p.segments} 段，只抽前 ${fmtDur(Math.round(p.spanSec))}）` : '';
             console.log(`UP: ${p.up}   时长: ${fmtDur(p.durationSec)}${p.page > 1 ? `   第 ${p.page} P` : ''}   画质: ${qual}${seg}`);
-            console.log(`时间点: ${p.times.map((t, i) => `${i + 1}=${fmtDur(Math.round(t))}`).join('  ')}`);
+            if (p.mode === 'range' && p.fps)
+                console.log(`候选: ${p.candidates} 帧（${p.fps}fps）${p.diff ? '，按画面变化筛选' : ''}`);
+            else
+                console.log(`时间点: ${p.times.map((t, i) => `${i + 1}=${formatClockFine(t)}`).join('  ')}`);
         },
     });
-    const N = res.cols * res.rows;
-    console.log(`\n✓ 九宫格: ${res.path}`);
-    console.log(`  一格 ${res.cellWidth}×${res.cellHeight}，按行读（1 左上 → ${N} 右下）；把路径交给看图工具看一眼 ✓`);
-    console.log('  图看不清就 --grid 4x4（更细）、--p 2 换一 P；字幕有官方轨时先 --read，抽帧是补画面那一路');
+    if (!res.paths.length) {
+        console.log('（没有生成拼图）');
+        return;
+    }
+    console.log(`\n✓ ${res.paths.length > 1 ? `${res.paths.length} 张拼图` : '拼图'}:`);
+    for (const [i, sh] of res.sheets.entries()) {
+        console.log(`  ${i + 1}. ${sh.path}`);
+        console.log(`     时间码: ${sh.timesSec.map((t, j) => `${j + 1}=${formatClockFine(t)}`).join('  ')}`);
+    }
+    console.log(`  一格 ${res.cellWidth}×${res.cellHeight}，按行读（格号 1 左上 → ${res.cols * res.rows} 右下）；把路径交给看图工具 ✓`);
+    if (!res.labels)
+        console.log('  图上没烧格号 / 时间码（没找到字体 / ffmpeg 没 drawtext）—— 按上面的时间码对照');
+    if (res.missingSec.length)
+        console.log(`  有 ${res.missingSec.length} 帧没抽出来：${res.missingSec.map((t) => formatClockFine(t)).join(' ')}`);
+    if (res.cached)
+        console.log('  复用缓存（同一 BV / 参数 7 天内不重抽）');
+    console.log('  看不清就 --grid 4x4、--crop 裁一块；想看某段就 --range 02:10-02:25 --fps 2 --diff');
 }
 // ── 收件箱（谁 @ 了你 / 谁回了你）─────────────────────────────────────────
 // 发现与「挂到哪条评论下」的判断都在 ops.inbox（含已读与水位落盘）；这里只排版。

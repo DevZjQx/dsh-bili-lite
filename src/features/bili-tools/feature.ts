@@ -18,6 +18,7 @@
 import { BiliError, feed, up, following, video, shots, inbox, comment, interact, schedule, history } from '../bili-agent/feature.ts'
 import type { VideoRead, ScheduleCommand, ScheduleResult, HistoryQuery, InboxResult, UpResult, VideoOverview, VideoTranscript } from '../bili-agent/feature.ts'
 import type { ToolsLike, ToolDefinitionLike, ContentBlockLike } from '../../lib/dsh.ts'
+import { parseClockList, parseClockRange, parseCrop, formatClockFine } from '../../lib/timecode.ts'
 
 // ── schema 小工具（只写 DSH 认识的那几个关键字）────────────────────────────
 type Schema = Record<string, unknown>
@@ -353,45 +354,107 @@ function drafts(): DraftTool[] {
     {
       name: 'bili_shots',
       description:
-        '抽帧九宫格：按时间点等间隔取若干帧拼成一张图（默认 3×3），补上「字幕之外」的画面。'
-        + '返回图片绝对路径，需要你再用看图工具看一眼。要宿主装了 ffmpeg。',
+        '抽帧看画面：默认整条等间隔拼九宫格；给 at / range 就只抽那些时刻（range 可配 fps 密抽、diff 只留画面变过的帧）。'
+        + '格号 + 时间码烧在每格左上角（如「3 12:30」），返回图片绝对路径 —— 还要用看图工具读。'
+        + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
       parameters: params({
         bvid: str('BV 号'),
-        grid: str('格子，如 3x3 / 4x4（每边 1–6 格，默认 3x3）'),
+        grid: str('格子，如 3x3 / 4x4（每边 1–6 格，默认 3x3；也是每张图的上限）'),
         page: num('第几 P（默认 1）'),
+        at: str('只抽这些时刻：mm:ss 或秒，逗号分隔（如 03:20,05:10）；与 range 二选一'),
+        range: str('只抽这一段：mm:ss-mm:ss（如 02:10-02:35）；可与 fps / diff 同用'),
+        fps: num('区间密抽帧率 1–5（只配 range；给 diff 时默认 2）'),
+        diff: bool('区间密抽后只留画面真的变过的帧（配 range 用）'),
+        crop: str('裁一块看细节：x,y,w,h 为 0–1 相对坐标（如 0.62,0.06,0.36,0.30）'),
       }, ['bvid']),
       schema: obj({
         bvid: { type: 'string' },
         title: { type: 'string' },
         up: { type: 'string' },
         path: { type: 'string' },
+        paths: arr('全部拼图', { type: 'string' }),
+        sheets: arr('每张拼图的时间码', obj({
+          path: { type: 'string' },
+          timesSec: arr('每格时间点（秒，按行）', { type: 'number' }),
+        }, ['path', 'timesSec'])),
         cols: { type: 'number' },
         rows: { type: 'number' },
         cellWidth: { type: 'number' },
         cellHeight: { type: 'number' },
-        timesSec: arr('每格的取帧时间点（秒）', { type: 'number' }),
+        timesSec: arr('所有选中帧的时间点（秒，跨图展平）', { type: 'number' }),
+        mode: oneOf('抽帧方式', ['grid', 'at', 'range']),
+        range: obj({ fromSec: { type: 'number' }, toSec: { type: 'number' } }, ['fromSec', 'toSec']),
+        fps: { type: 'number' },
+        diff: { type: 'boolean' },
+        candidates: { type: 'number' },
+        dropped: { type: 'number' },
+        labels: { type: 'boolean' },
+        missingSec: arr('没抽出来的时间点（黑格）', { type: 'number' }),
+        cached: { type: 'boolean' },
         quality: { type: 'number' },
         page: { type: 'number' },
         pageCount: { type: 'number' },
         durationSec: { type: 'number' },
         segments: { type: 'number' },
         truncatedAtSec: { type: 'number' },
-      }, ['bvid', 'title', 'path', 'cols', 'rows', 'cellWidth', 'cellHeight', 'timesSec', 'page', 'pageCount', 'durationSec', 'segments']),
+      }, ['bvid', 'title', 'path', 'paths', 'sheets', 'cols', 'rows', 'cellWidth', 'cellHeight', 'timesSec', 'mode', 'labels', 'missingSec', 'page', 'pageCount', 'durationSec', 'segments']),
       async execute(args, exec) {
         const a = (args ?? {}) as Record<string, unknown>
+        const atText = asStr(a.at)
+        const rangeText = asStr(a.range)
+        const cropText = asStr(a.crop)
+        const atParsed = atText ? parseClockList(atText) : undefined
+        if (atText && !atParsed) throw new Error('at 要写成 03:20,05:10（也认秒数 200,310）')
+        const at = atParsed ?? undefined
+        const rangeParsed = rangeText ? parseClockRange(rangeText) : undefined
+        if (rangeText && !rangeParsed) throw new Error('range 要写成 02:10-02:35（也认秒数 130-155）')
+        const range = rangeParsed ?? undefined
+        const cropParsed = cropText ? parseCrop(cropText) : undefined
+        if (cropText && !cropParsed) throw new Error('crop 要写成 x,y,w,h（0–1 相对坐标），如 0.62,0.06,0.36,0.30')
+        const crop = cropParsed ?? undefined
         try {
           return await shots({
             bvid: String(a.bvid ?? ''),
             grid: asStr(a.grid),
             page: asNum(a.page),
+            at,
+            range,
+            fps: asNum(a.fps),
+            diff: asBool(a.diff),
+            crop,
             signal: exec.signal,
           })
         } catch (e) { fail(e) }
       },
       render(_args, value) {
-        const v = value as { title: string; path: string; cols: number; rows: number; cellWidth: number; cellHeight: number; timesSec: number[] }
-        const n = v.cols * v.rows
-        return text(`《${v.title}》抽帧 ${v.cols}×${v.rows} → ${v.path}\n一格 ${v.cellWidth}×${v.cellHeight}，按行读（1 左上 → ${n} 右下）。用看图工具读这个路径。`)
+        const v = value as {
+          title: string; paths: string[]; sheets: Array<{ path: string; timesSec: number[] }>
+          cols: number; rows: number; cellWidth: number; cellHeight: number
+          mode: 'grid' | 'at' | 'range'; range?: { fromSec: number; toSec: number }
+          fps?: number; diff?: boolean; candidates?: number; dropped?: number
+          labels: boolean; missingSec: number[]; cached?: boolean
+        }
+        const count = v.sheets.reduce((n, s) => n + s.timesSec.length, 0)
+        const clock = formatClockFine
+        const modeText = v.mode === 'grid'
+          ? `等间隔 ${v.cols * v.rows} 帧`
+          : v.mode === 'at'
+            ? `指定 ${count} 个时间点`
+            : `区间 ${formatClockFine(v.range?.fromSec ?? 0)}–${formatClockFine(v.range?.toSec ?? 0)}${v.fps ? ` · ${v.fps}fps 密抽` : ''}${v.diff ? ` → 留变化 ${count} 帧` : ''}`
+        const head = v.paths.length > 1
+          ? `《${v.title}》${modeText}${v.cached ? '（复用缓存）' : ''} → ${v.paths.length} 张`
+          : `《${v.title}》${modeText} → ${v.paths[0]}${v.cached ? '（复用缓存）' : ''}`
+        const lines = [head]
+        for (const [i, sh] of v.sheets.entries()) {
+          if (v.paths.length > 1) lines.push(`第 ${i + 1} 张：${sh.path}`)
+          lines.push(`时间码：${sh.timesSec.map((t, j) => `${j + 1}=${clock(t)}`).join(' · ')}`)
+        }
+        lines.push(`一格 ${v.cellWidth}×${v.cellHeight}，按行读（每张图从 1 重新数）；用看图工具读路径。`)
+        if (!v.labels) lines.push('图上没烧格号 / 时间码（缺字体 / drawtext），按上面的时间码对照。')
+        if (v.missingSec.length) lines.push(`没抽出来：${v.missingSec.map((t) => clock(t)).join(' ')}`)
+        if (v.dropped) lines.push(`区间共 ${v.candidates ?? 0} 帧，丢掉 ${v.dropped} 帧（没变 / 没抽出来）。`)
+        lines.push('静帧只能证明「这一秒长这样」；运动、声音、前后因果都不在里面。')
+        return text(lines.join('\n'))
       },
     },
 

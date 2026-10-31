@@ -14,8 +14,9 @@
 //   bun bili.ts video <BV> [--read 全文|mm:ss-mm:ss]
 //                                       看懂一条：概览（章节/字幕试读/弹幕热词/热评）；
 //                                       --read 深读字幕，不截断（只读）
-//   bun bili.ts shots <BV> [--grid 3x3] [--p 1] [--out 目录]
-//                                       抽帧九宫格：等间隔抽 N 帧拼一张图（要 ffmpeg，可选）
+//   bun bili.ts shots <BV> [--grid 3x3] [--p 1] [--out 目录] [--at 03:20,05:10]
+//                       [--range 02:10-02:35 [--fps 2] [--diff]] [--crop x,y,w,h]
+//                                       抽帧看画面：等间隔 / 指定时刻 / 区间密抽去重（要 ffmpeg，可选）
 //   bun bili.ts comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
 //                                       发一条评论；--reply 回到某条评论下面
 //   bun bili.ts inbox [--n 5] [--all] 收件箱：谁 @ 了你 / 谁回了你（只读）

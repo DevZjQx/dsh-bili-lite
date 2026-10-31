@@ -20,7 +20,7 @@
 - **自己挑**：喜欢 / 讨厌什么全由它自己判断（没有口味配置）—— `feed --kw "此刻想搜的词"` 自己搜；
   不给就先端关注的人最近发了什么（关注动态），不够再热门补，只排除看过的；想不起最近爱看什么就跑 `taste` 回顾自己的观看史；
   喜欢上谁就跑 `up <mid|名字>` 把 TA 的投稿翻一遍（只读，可翻页）
-- **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 抽 9 帧拼一张图看（要 ffmpeg，可选）
+- **真看懂**：概览章节/字幕试读/弹幕热词/热评；字幕想读多深自己 `--read`（读不设限、不截断 —— 克制只管写，不管读）；字幕说不清的画面，`shots` 先 3×3 扫一遍、再用 `--at` / `--range` 定位（格号 + 时间码烧在格子上；要 ffmpeg，可选）
 - **写日记**：它自己写 —— 用什么方式、写在哪个文件、按天还是按主题分篇、格式怎么写，全它自己定
 - **互动**：真喜欢就点赞 / 关注 UP（每天 ≤ `quota.interactDaily`（默认 **10**）次，同一视频 7 天内同一种互动只做一次）
 - **分享**：最多挑 1 条，发一条普通评论（共用账号，不需要 @ 谁；发之前先翻一眼自己写的日记 / 笔记，别重复、也别跟记下的打架；先 `--dry` 看一眼再 `--go`）
@@ -43,7 +43,7 @@
 
 **前提**：**Bun ≥ 1.2**（CLI 由它直接跑 TypeScript；找不到时会退到 Node 18+，`$BUN` / `$DSH_NODE` 都能指定）。
 宿主那一半是 TypeScript 编译出来的 `dist/`（普通 ESM）—— DSH 照旧用 Node 加载，不需要它认识 TS。
-抽帧九宫格另需 **ffmpeg**（可选，见下文；不装只是少画面那一路）。
+抽帧另需 **ffmpeg**（可选，见下文；不装只是少画面那一路）。
 
 ```bash
 # 0) 装依赖（dist 随仓库提交，装的时候不编译；改过源码才需要 bun run build）
@@ -124,7 +124,7 @@ bun src/features/bili-agent/bili.ts following [--n 50] [--page 1]
                                                      # 我关注了谁：名单 + mid + 关注时间（只读）
 bun src/features/bili-agent/bili.ts video <BV>     # 看懂一条：章节/字幕试读/弹幕热词/热评（只读）
 bun src/features/bili-agent/bili.ts video <BV> --read 全文     # 深读字幕全文（--read 03:00-08:30 看某一段）
-bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧九宫格（3×3；--grid 4x4 更细，要 ffmpeg）
+bun src/features/bili-agent/bili.ts shots <BV>     # 抽帧看画面（3×3；--at / --range 定位，要 ffmpeg）
 bun src/features/bili-agent/bili.ts comment <BV> --message "…" --dry|--go
 bun src/features/bili-agent/bili.ts comment <BV> --message "…" --reply <rpid> [--root <根rpid>] --dry|--go
                                                      # 回到某条评论下面（rpid 从 inbox 给的那行抄）
@@ -135,22 +135,33 @@ bun src/features/bili-agent/bili.ts ledger         # 今天的额度账本
 bun src/features/bili-agent/bili.ts taste [--days 30]  # 口味回顾：看过的 / 常看的 UP / 动过手的（只读）
 ```
 
-## 抽帧九宫格（可选，要 ffmpeg）
+## 抽帧看画面（可选，要 ffmpeg）
 
 字幕/弹幕/热评都说不到「画面上是什么」时，让它自己看一眼：
 
 ```bash
-bun src/features/bili-agent/bili.ts shots <BV>                     # 3×3 等间隔 9 帧，拼一张图
-bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / 换一 P
+bun src/features/bili-agent/bili.ts shots <BV>                              # 3×3 等间隔 9 帧
+bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2             # 更细 / 换一 P
+bun src/features/bili-agent/bili.ts shots <BV> --at 03:20,05:10             # 只抽这两个时刻
+bun src/features/bili-agent/bili.ts shots <BV> --range 02:10-02:35 --fps 2 --diff  # 区间密抽，只留变化帧
+bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid 2x2  # 裁一块看卡片 / 角落
 ```
 
-输出落在 `~/.dsh/bili-lite-work/shots/<BV>-<时间>-3x3.jpg`，把路径交给看图工具读一眼即可。
+输出落在 `~/.dsh/bili-lite-work/shots/`，把路径交给看图工具读一眼即可。
 
+- **格号 + 时间码烧在每格左上角**（如 `3 12:30`）：图离开终端也能对上字幕；同一秒里有多帧时带十分之一秒（`00:12.3`）。
+- **先扫后定位**：3×3 看结构，`--at` / `--range` 看具体那一段；`--diff` 只留画面真的变过的帧，
+  帧数超过一张图的格数就多出几张图（按格数平均分、缺的格补黑），不硬塞。
+- **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
+- **缓存与清理**：同一 BV / page / 参数 7 天内复用；`shots/` 只留最近 40 张（`--out` 指定的目录不参与清理）。
 - **要 ffmpeg**（不装 npm 包、不随包分发）：`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`，
   或用环境变量 `FFMPEG=/绝对路径/ffmpeg` 指，或把它放到 `~/.dsh/bili-lite-work/bin/ffmpeg`；`selftest` 会显示装没装。
+  画时间码的字体默认自动找（Windows/macOS/Linux 常见路径 + fontconfig），也可以用 `FFMPEG_FONT=/路径/字体` 指定；
+  找不到字体就只抽图、不烧码，其余照常。
 - **不装也不影响别的**：只有 `shots` 报错，`video` / `feed` / `comment` 照常。
-- **不落整段视频**：ffmpeg 直接对播放直链按时间点 seek，抽完临时帧就删 —— 长视频也不占磁盘。
 - **画质跟登录态走**：匿名只有 360P，登录后一般 720P（多段老视频只抽第一段，会提示）。
+- **边界**：静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；字幕是平台转写（UP 配 / AI），不是原声。
+  想要声音、画面、原文三路独立证据，需要宿主另有 ASR —— lite 不假装有。
 
 ## 人设（可选）
 
@@ -173,7 +184,7 @@ bun src/features/bili-agent/bili.ts shots <BV> --grid 4x4 --p 2    # 更细 / �
 | `~/.dsh/bili-lite-work/inbox.json` | 收件箱水位：哪些 @ / 回复已经看过、翻到哪儿了（只影响「哪条算新」） |
 | `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
 | `~/.dsh/bili-lite-work/persona.md` | 人设（可选） |
-| `~/.dsh/bili-lite-work/shots/` | 抽帧九宫格生成的图（`shots` 的落点，看完可删） |
+| `~/.dsh/bili-lite-work/shots/` | 抽帧拼图（`shots` 的落点；7 天缓存，自动只留最近 40 张） |
 | `~/.dsh/bili-lite-work/` 下的日记 | 它自己写的（文件名 / 位置 / 分篇 / 格式全由它定，插件不规定） |
 
 ## 开发（Bun + TypeScript）
@@ -219,7 +230,7 @@ src/
 | | whale | lite |
 |---|---|---|
 | 代码文件 | ~50 个 | ~17 个（3 个运行面） |
-| 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评+抽帧九宫格（要 ffmpeg，可选：没装就只少画面这一路） |
+| 看 | 字幕+弹幕+热评+抽帧九宫格 | 字幕+弹幕+热评+抽帧（整条九宫格 / 指定时刻 / 区间去重；要 ffmpeg，可选） |
 | 写 | 评论/私信/弹幕/动态/收藏/三连 | 评论 + 回复（限额 + 判重）+ 点赞/关注 |
 | 登录 | 扫码 + 手动 cookie | 扫码 + 手动 cookie（同一份二维码编码器，终端出图形、设置页出 SVG） |
 | 监听 | 评论/私信/直播间轮询 | 无后台监听 —— 靠 `inbox` 拉一次收件箱（谁 @ / 谁回），跑一次看一次 |

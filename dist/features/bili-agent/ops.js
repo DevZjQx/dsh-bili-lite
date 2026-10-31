@@ -20,8 +20,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { apiGet, apiPost, explainCode, loadCred, whoami, wbi, getFollowingFeed, searchUsers, getSpaceVideos, getFollowings, getView, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getMsgFeed, getThreadReplies, banUntil, banWhy, getPlayUrl, UA } from '../../lib/bilibili.js';
-import { requireFfmpeg, runFfmpeg } from '../../lib/ffmpeg.js';
+import { requireFfmpeg, runFfmpegAsync, ffmpegCaps, findFfmpegFont, isFfmpegAbort } from '../../lib/ffmpeg.js';
+import { formatClock, formatClockFine } from '../../lib/timecode.js';
 import { SHOTS_DIR } from '../../config/paths.js';
 import { seenSet, ledgerAppend, readLedger, writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, today } from './ledger.js';
 import { config, DEFAULTS } from '../../config/store.js';
@@ -415,11 +417,140 @@ async function transcript(bvid, title, v, credential, read) {
     const text = flowText(sel.map((l) => l.text));
     return { ...base, subtitleKind: String(sub.lan ?? '').startsWith('ai-') ? 'ai' : 'cc', chars: text.length, text };
 }
+const SHOTS_KEEP = 40;
+const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000;
+/** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
+const SHOTS_CACHE_VERSION = 3;
+const FRAME_CONCURRENCY = 4;
+const FRAME_ATTEMPTS = 2;
+const MAX_CANDIDATES = 40;
+/** 相邻帧 SSIM ≥ 这个值就当「没变」 */
+const DIFF_SSIM = 0.985;
+/** 只清自己生成的图：BV-pN-时间-格数(-第几张).jpg */
+const SHOTS_FILE_RE = /^BV[0-9A-Za-z]{10}(?:-p\d+)?-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-\d+x\d+(?:-\d+of\d+)?\.jpg$/;
+const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+/** 限并发跑任务；任何一项抛错就整体失败（abort 时其余项会很快看到 signal） */
+async function mapLimit(items, limit, fn) {
+    const out = new Array(items.length);
+    let next = 0;
+    const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (true) {
+            const i = next;
+            next += 1;
+            if (i >= items.length)
+                return;
+            out[i] = await fn(items[i], i);
+        }
+    });
+    await Promise.all(workers);
+    return out;
+}
+/** n 帧平均分到若干张图，尽量不把最后一张塞爆（不够的格补黑） */
+function sheetSizes(n, capacity) {
+    if (n <= 0)
+        return [];
+    const count = Math.ceil(n / capacity);
+    const base = Math.floor(n / count);
+    const extra = n % count;
+    return Array.from({ length: count }, (_, i) => base + (i < extra ? 1 : 0));
+}
+/** filter 里的路径转义：冒号是选项分隔符，单引号是字符串边界 */
+const filterQuote = (s) => `'${s.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'")}'`;
 /**
- * 抽帧九宫格：对直链按时间点远程 seek 各取一帧，再 tile 拼成一张图。
- * 不落整段视频 —— 长视频也只读几个字节范围，磁盘和内存都不随视频长度涨。
+ * 只画格号 + 时间码的滤镜（裁切 / 缩放已经在取帧时做过了）。
+ * 格号跟这张图的行序号一致：图会进日记 / 笔记、以后还会被重读，
+ * 没有格号就只能靠"每张图重新数"，脱离了这次的终端输出就对不上。
+ */
+function labelVf(font, cellNo, sec, cw) {
+    const size = Math.max(14, Math.round(cw / 24));
+    const text = `${cellNo} ${formatClockFine(sec)}`.replace(/:/g, '\\:');
+    return `drawtext=fontfile=${filterQuote(font)}:text='${text}':x=8:y=8:fontsize=${size}:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=6`;
+}
+function shotsCacheFile(key) {
+    return path.join(SHOTS_DIR, '.cache', `${key}.json`);
+}
+function readShotsCache(key) {
+    try {
+        const meta = JSON.parse(fs.readFileSync(shotsCacheFile(key), 'utf8'));
+        if (meta.v !== SHOTS_CACHE_VERSION || !meta.result || Date.now() - Number(meta.createdAt) > SHOTS_CACHE_TTL_MS)
+            return null;
+        const paths = Array.isArray(meta.result.paths) ? meta.result.paths : [];
+        if (!paths.length || !paths.every((p) => fs.existsSync(p)))
+            return null;
+        return { ...meta.result, missingSec: meta.result.missingSec ?? [], cached: true };
+    }
+    catch {
+        return null;
+    }
+}
+function writeShotsCache(key, result) {
+    try {
+        const file = shotsCacheFile(key);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const meta = { v: SHOTS_CACHE_VERSION, createdAt: Date.now(), result };
+        const tmp = `${file}.${process.pid}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(meta));
+        fs.renameSync(tmp, file);
+    }
+    catch { /* 缓存写失败不影响这次结果 */ }
+}
+/** 只留最近 40 张图；顺手清掉过期 / 指向已删图的缓存索引 */
+function pruneShots() {
+    try {
+        if (!fs.existsSync(SHOTS_DIR))
+            return;
+        const files = fs.readdirSync(SHOTS_DIR)
+            .filter((n) => SHOTS_FILE_RE.test(n))
+            .map((n) => { const p = path.join(SHOTS_DIR, n); return { p, mtime: fs.statSync(p).mtimeMs }; })
+            .sort((a, b) => b.mtime - a.mtime);
+        for (const f of files.slice(SHOTS_KEEP))
+            fs.rmSync(f.p, { force: true });
+        const cacheDir = path.join(SHOTS_DIR, '.cache');
+        if (!fs.existsSync(cacheDir))
+            return;
+        for (const n of fs.readdirSync(cacheDir)) {
+            const p = path.join(cacheDir, n);
+            try {
+                const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
+                const stale = !meta.result || Date.now() - Number(meta.createdAt) > SHOTS_CACHE_TTL_MS * 2;
+                const missing = !Array.isArray(meta.result?.paths) || !meta.result.paths.every((x) => fs.existsSync(x));
+                if (stale || missing)
+                    fs.rmSync(p, { force: true });
+            }
+            catch {
+                fs.rmSync(p, { force: true });
+            }
+        }
+    }
+    catch { /* 清理失败不影响抽帧 */ }
+}
+/** 两帧像不像（SSIM，1 = 一样）；算不出来返回 null（调用方当作「变了」） */
+async function ssimScore(bin, a, b, signal) {
+    try {
+        const r = await runFfmpegAsync(bin, [
+            '-nostdin', '-hide_banner', '-loglevel', 'info', '-nostats',
+            '-i', a, '-i', b, '-lavfi', 'ssim', '-f', 'null', '-',
+        ], { timeout: 30_000, signal });
+        const m = /All:([0-9.]+)/.exec(r.stderr);
+        return m ? Number(m[1]) : null;
+    }
+    catch (e) {
+        if (isFfmpegAbort(e))
+            throw new BiliError('unsupported', '抽帧被取消');
+        return null;
+    }
+}
+/**
+ * 抽帧看画面：整条等间隔（grid）、指定时刻（at）、或区间密抽（range）。
+ * 默认 3×3 九宫格；格号 + 时间码烧在每格左上角（`1 12:30`），图离开终端也能对上字幕。
  *
- * progress 是给终端看的（取帧进度、头部信息），工具侧不传 —— 数据一律走返回值。
+ * 不落整段视频 —— 对直链按时间点远程 seek，只读需要的那几个字节范围。
+ * 取帧 4 路并发；一帧失败重试一次，仍失败就留黑格并在 missingSec 里点名，
+ * 不因为一格毁掉整张图。range + diff 时先密抽、再按 SSIM 丢掉没变的帧，
+ * 帧数超过一张图的格数就出第二张 —— 宁可多一张，不把格子塞满。
+ *
+ * 同一 BV / page / 参数在 7 天内直接复用缓存（SHOTS_DIR 只留最近 40 张）。
+ * progress 是给终端看的，工具侧不传 —— 数据一律走返回值。
  */
 export async function shots(opts) {
     const bvid = String(opts.bvid ?? '').trim();
@@ -432,8 +563,51 @@ export async function shots(opts) {
     if (!m || cols < 1 || rows < 1 || cols > 6 || rows > 6) {
         throw new BiliError('usage', '--grid 要写成 3x3 / 4x4 这样（每边 1–6 格）');
     }
-    const N = cols * rows;
+    const capacity = cols * rows;
     const p = Math.max(1, Math.trunc(finiteOr(opts.page, 1)));
+    const at = opts.at?.length ? [...new Set(opts.at)].sort((a, b) => a - b) : undefined;
+    const range = opts.range;
+    if (at && range)
+        throw new BiliError('usage', '--at 和 --range 只能给一个', '整条就 --grid；某几秒就 --at；某一段就 --range');
+    if (at && opts.diff)
+        throw new BiliError('usage', '--diff 只用于 --range', '--at 给的时刻本来就是你挑的');
+    if (at && opts.fps !== undefined)
+        throw new BiliError('usage', '--fps 只用于 --range');
+    if (opts.diff && !range)
+        throw new BiliError('usage', '--diff 要配 --range', '先圈一段，再只留画面变过的帧');
+    if (opts.fps !== undefined && !range)
+        throw new BiliError('usage', '--fps 只用于 --range');
+    const mode = at ? 'at' : range ? 'range' : 'grid';
+    const fps = range && (opts.diff || opts.fps !== undefined) ? (opts.fps ?? 2) : undefined;
+    if (fps !== undefined && (!Number.isFinite(fps) || fps < 1 || fps > 5)) {
+        throw new BiliError('usage', '--fps 要在 1–5 之间', '区间不长，2 帧/秒通常够了');
+    }
+    const crop = opts.crop;
+    if (crop) {
+        const [x, y, w, h] = crop;
+        const ok = [x, y, w, h].every((n) => Number.isFinite(n))
+            && x >= 0 && y >= 0 && w >= 0.01 && h >= 0.01 && x + w <= 1.0001 && y + h <= 1.0001;
+        if (!ok)
+            throw new BiliError('usage', 'crop 要写成 x,y,w,h（0–1 的相对坐标）', '例：0.62,0.06,0.36,0.30');
+    }
+    const useCache = !opts.outDir;
+    const cacheKey = createHash('sha1').update(JSON.stringify({
+        v: SHOTS_CACHE_VERSION,
+        bvid,
+        page: p,
+        grid,
+        mode,
+        at: at ? at.map((t) => t.toFixed(2)).join(',') : '',
+        range: range ? `${range.fromSec.toFixed(2)}-${range.toSec.toFixed(2)}` : '',
+        fps: fps ?? 0,
+        diff: !!opts.diff,
+        crop: crop ? crop.map((n) => n.toFixed(3)).join(',') : '',
+    })).digest('hex');
+    if (useCache) {
+        const hit = readShotsCache(cacheKey);
+        if (hit)
+            return hit;
+    }
     let ff;
     try {
         ff = requireFfmpeg();
@@ -453,19 +627,44 @@ export async function shots(opts) {
     const play = await getPlayUrl(bvid, page.cid, credential);
     // 多段视频（老的长视频）只有第一段能抽 —— 把时间点压缩到这一段里，别在后半段白等
     const span = play.seconds > 1 ? Math.min(dur, play.seconds) : dur;
-    // 每格取「该格时间窗的中点」：开头常是黑场/片头，结尾常是黑场，掐头去尾各半格
-    const times = Array.from({ length: N }, (_, i) => Math.min(span - 0.2, Math.max(0, ((i + 0.5) * span) / N)));
-    // 格子尺寸跟视频自身比例走（竖屏就 360×640），保证拼图不变形
-    const dw = Number(v.dimension?.width) || 16;
-    const dh = Number(v.dimension?.height) || 9;
-    const even = (n) => Math.max(2, Math.round(n / 2) * 2);
-    const cw = even(dw >= dh ? 640 : (640 * dw) / dh);
-    const ch = even(dw >= dh ? (640 * dh) / dw : 640);
-    const vf = `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2:color=black`;
-    const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`;
-    const outDir = opts.outDir ? path.resolve(opts.outDir) : SHOTS_DIR;
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const sheet = path.join(outDir, `${bvid}${p > 1 ? `-p${p}` : ''}-${stamp}-${cols}x${rows}.jpg`);
+    const truncatedAtSec = play.segments > 1 ? span : undefined;
+    const maxT = Math.max(0, span - 0.2);
+    // ── 计划时间点 ──
+    let planned = [];
+    if (at) {
+        planned = [...at];
+        if (planned.length > MAX_CANDIDATES) {
+            throw new BiliError('usage', `一次最多 ${MAX_CANDIDATES} 个时间点`, '分几次抽，或用 --range');
+        }
+        const bad = planned.find((t) => !Number.isFinite(t) || t < 0 || t >= span);
+        if (bad !== undefined) {
+            throw new BiliError('usage', `时间点 ${formatClock(bad)} 超出可抽范围 00:00–${formatClock(span)}`, play.segments > 1 ? '多条分段的老视频只抽第一段 —— 这个时间点之后抽不到' : '换个时间点');
+        }
+    }
+    else if (range) {
+        const from = Math.max(0, range.fromSec);
+        const to = Math.min(span, range.toSec);
+        if (!(from < to)) {
+            throw new BiliError('usage', `--range 超出可抽范围（00:00–${formatClock(span)}）`, '起点要早于终点，且落在视频里');
+        }
+        if (fps !== undefined) {
+            const step = 1 / fps;
+            const out = [];
+            for (let t = from + step / 2; t < to; t += step)
+                out.push(Math.min(Math.max(0, to - 0.01), t));
+            if (out.length > MAX_CANDIDATES) {
+                throw new BiliError('usage', `区间 ${formatClock(from)}–${formatClock(to)} × ${fps}fps = ${out.length} 帧，超过 ${MAX_CANDIDATES} 上限`, '缩小区间或降 --fps');
+            }
+            planned = out;
+        }
+        else {
+            planned = Array.from({ length: capacity }, (_, i) => Math.min(Math.max(0, to - 0.01), from + ((i + 0.5) * (to - from)) / capacity));
+        }
+    }
+    else {
+        // 每格取「该格时间窗的中点」：开头常是黑场/片头，结尾常是黑场，掐头去尾各半格
+        planned = Array.from({ length: capacity }, (_, i) => Math.min(maxT, Math.max(0, ((i + 0.5) * span) / capacity)));
+    }
     opts.progress?.({
         stage: 'plan',
         title: String(v.title ?? ''),
@@ -475,53 +674,205 @@ export async function shots(opts) {
         quality: play.quality,
         segments: play.segments,
         spanSec: span,
-        times,
+        times: planned,
+        mode,
+        range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
+        fps,
+        diff: !!opts.diff,
+        candidates: planned.length,
     });
+    // 格子尺寸跟画面（裁切后）比例走；竖屏就 360×640，裁一块就按裁切后的比例
+    const dw = Number(v.dimension?.width) || 16;
+    const dh = Number(v.dimension?.height) || 9;
+    const ar = crop ? (dw * crop[2]) / (dh * crop[3]) : dw / dh;
+    const base = 640;
+    const cw = even(ar >= 1 ? base : base * ar);
+    const ch = even(ar >= 1 ? base / ar : base);
+    const scalePad = [
+        ...(crop
+            ? [`crop=trunc(iw*${crop[2].toFixed(4)}/2)*2:trunc(ih*${crop[3].toFixed(4)}/2)*2:trunc(iw*${crop[0].toFixed(4)}/2)*2:trunc(ih*${crop[1].toFixed(4)}/2)*2`]
+            : []),
+        `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos`,
+        `pad=${cw}:${ch}:(ow-iw)/2:(oh-ih)/2:color=black`,
+    ].join(',');
+    const headers = `Referer: https://www.bilibili.com/\r\nUser-Agent: ${UA}\r\n`;
+    const outDir = opts.outDir ? path.resolve(opts.outDir) : SHOTS_DIR;
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
+    const stem = `${bvid}${p > 1 ? `-p${p}` : ''}-${stamp}-${cols}x${rows}`;
+    const caps = ffmpegCaps(ff);
+    const font = caps.drawtext ? findFfmpegFont() : null;
+    let labels = !!font;
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bili-shots-'));
     try {
-        for (let i = 0; i < N; i += 1) {
-            if (opts.signal?.aborted)
-                throw new BiliError('unsupported', '抽帧被取消');
-            const f = path.join(tmp, `f${String(i).padStart(2, '0')}.jpg`);
-            runFfmpeg(ff, [
-                '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-                '-headers', headers, '-ss', times[i].toFixed(2), '-i', play.url,
-                '-frames:v', '1', '-vf', vf, '-q:v', '2', f,
-            ], { timeout: 120_000 });
-            if (!fs.existsSync(f) || fs.statSync(f).size < 1000) {
-                throw new BiliError('upstream', `第 ${i + 1} 帧（${Math.round(times[i])} 秒）没抽出来`);
+        // ── 取帧（4 路并发；一帧失败重试一次，仍失败就留黑格）──
+        const extract = async (t, file) => {
+            let last = '';
+            for (let attempt = 1; attempt <= FRAME_ATTEMPTS; attempt += 1) {
+                if (opts.signal?.aborted)
+                    throw new BiliError('unsupported', '抽帧被取消');
+                try {
+                    await runFfmpegAsync(ff, [
+                        '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                        '-headers', headers, '-ss', t.toFixed(2), '-i', play.url,
+                        '-frames:v', '1', '-vf', scalePad, '-q:v', '2', file,
+                    ], { timeout: 120_000, signal: opts.signal });
+                    if (fs.existsSync(file) && fs.statSync(file).size >= 1000)
+                        return { ok: true };
+                    last = `${formatClock(t)} 这一帧没抽出来`;
+                }
+                catch (e) {
+                    if (isFfmpegAbort(e))
+                        throw new BiliError('unsupported', '抽帧被取消');
+                    last = msg(e);
+                    if (last.includes('超时'))
+                        break;
+                }
+                fs.rmSync(file, { force: true });
             }
-            opts.progress?.({ stage: 'frame', done: i + 1, total: N });
+            return { ok: false, error: last };
+        };
+        let done = 0;
+        const extracted = await mapLimit(planned, FRAME_CONCURRENCY, async (t, i) => {
+            const file = path.join(tmp, `c${String(i).padStart(2, '0')}.jpg`);
+            const r = await extract(t, file);
+            done += 1;
+            opts.progress?.({ stage: 'frame', done, total: planned.length });
+            return { t, file: r.ok ? file : null, error: r.error };
+        });
+        const okFrames = extracted.flatMap((f) => (f.file ? [{ t: f.t, file: f.file }] : []));
+        if (!okFrames.length) {
+            const firstErr = extracted.find((f) => f.error)?.error;
+            throw new BiliError('upstream', '一帧都没抽出来', firstErr ? `最后一次：${firstErr.slice(0, 160)}` : '换 --p / 稍后再试');
         }
+        // ── 去重：先密抽，再只留画面真的变过的帧；时间码等选完再烧，免得文字差异干扰 SSIM ──
+        let slots = [];
+        let dropped;
+        if (opts.diff) {
+            const keep = [okFrames[0]];
+            if (caps.ssim && okFrames.length > 1) {
+                const pairs = okFrames.slice(1).map((f, i) => [okFrames[i], f]);
+                const sims = await mapLimit(pairs, FRAME_CONCURRENCY, async ([a, b]) => ssimScore(ff, a.file, b.file, opts.signal));
+                pairs.forEach(([, b], i) => {
+                    const sim = sims[i];
+                    if (sim === null || sim < DIFF_SSIM)
+                        keep.push(b);
+                });
+            }
+            else if (okFrames.length > 1) {
+                keep.push(...okFrames.slice(1));
+            }
+            slots = keep.map((f) => ({ t: f.t, file: f.file }));
+            dropped = planned.length - slots.length;
+            opts.progress?.({
+                stage: 'select', candidates: planned.length, kept: slots.length,
+                dropped, missing: planned.length - okFrames.length,
+            });
+        }
+        else {
+            slots = extracted.map((f) => ({ t: f.t, file: f.file }));
+        }
+        const missingSec = extracted.filter((f) => !f.file).map((f) => f.t);
+        // ── 格号 + 时间码 ──
+        // 每张图从 1 数到格数（和返回的 timesSec 顺序一致）；先按格数分好张，
+        // 才知道这一帧落到第几张、第几格。
+        const sizes = sheetSizes(slots.length, capacity);
+        const cellNo = new Array(slots.length);
+        {
+            let start = 0;
+            for (const size of sizes) {
+                for (let k = 0; k < size; k += 1)
+                    cellNo[start + k] = k + 1;
+                start += size;
+            }
+        }
+        if (labels && font) {
+            let labelFailed = false;
+            const labelDir = path.join(tmp, 'label');
+            fs.mkdirSync(labelDir, { recursive: true });
+            slots = await mapLimit(slots, FRAME_CONCURRENCY, async (s, i) => {
+                if (!s.file)
+                    return s;
+                const dst = path.join(labelDir, `l${String(i).padStart(2, '0')}.jpg`);
+                try {
+                    await runFfmpegAsync(ff, [
+                        '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                        '-i', s.file, '-frames:v', '1', '-vf', labelVf(font, cellNo[i], s.t, cw), '-q:v', '2', dst,
+                    ], { timeout: 30_000, signal: opts.signal });
+                    if (fs.existsSync(dst) && fs.statSync(dst).size >= 1000)
+                        return { t: s.t, file: dst };
+                }
+                catch (e) {
+                    if (isFfmpegAbort(e))
+                        throw new BiliError('unsupported', '抽帧被取消');
+                }
+                labelFailed = true;
+                return s;
+            });
+            labels = !labelFailed;
+        }
+        // ── 拼图：按格数分张，超过就出第二张；缺的格用黑图补 ──
         fs.mkdirSync(outDir, { recursive: true });
-        runFfmpeg(ff, [
+        const black = path.join(tmp, 'black.jpg');
+        await runFfmpegAsync(ff, [
             '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-            '-i', path.join(tmp, 'f%02d.jpg'), '-vf', `tile=${cols}x${rows}`, '-frames:v', '1', '-q:v', '2', sheet,
-        ], { timeout: 60_000 });
-        if (!fs.existsSync(sheet))
-            throw new BiliError('upstream', '拼图没生成', '换 --grid 少抽几帧再试');
+            '-f', 'lavfi', '-i', `color=c=black:s=${cw}x${ch}:d=1`,
+            '-frames:v', '1', '-q:v', '2', black,
+        ], { timeout: 30_000, signal: opts.signal });
+        const sheets = [];
+        let cursor = 0;
+        for (let s = 0; s < sizes.length; s += 1) {
+            const chunk = slots.slice(cursor, cursor + sizes[s]);
+            cursor += sizes[s];
+            const dir = path.join(tmp, `sheet${s}`);
+            fs.mkdirSync(dir, { recursive: true });
+            for (let k = 0; k < capacity; k += 1) {
+                fs.copyFileSync(chunk[k]?.file ?? black, path.join(dir, `f${String(k).padStart(2, '0')}.jpg`));
+            }
+            const file = path.join(outDir, `${stem}${sizes.length > 1 ? `-${s + 1}of${sizes.length}` : ''}.jpg`);
+            await runFfmpegAsync(ff, [
+                '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                '-i', path.join(dir, 'f%02d.jpg'), '-vf', `tile=${cols}x${rows}`, '-frames:v', '1', '-q:v', '2', file,
+            ], { timeout: 60_000, signal: opts.signal });
+            if (!fs.existsSync(file))
+                throw new BiliError('upstream', '拼图没生成', '换 --grid 少抽几帧再试');
+            sheets.push({ path: file, timesSec: chunk.map((f) => f.t) });
+        }
+        const result = {
+            bvid,
+            title: String(v.title ?? ''),
+            up: v.owner?.name ? String(v.owner.name) : undefined,
+            path: sheets[0].path,
+            paths: sheets.map((s) => s.path),
+            sheets,
+            cols,
+            rows,
+            cellWidth: cw,
+            cellHeight: ch,
+            timesSec: sheets.flatMap((s) => s.timesSec),
+            mode,
+            range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,
+            fps,
+            diff: opts.diff ? true : undefined,
+            candidates: fps !== undefined ? planned.length : undefined,
+            dropped,
+            labels,
+            missingSec,
+            quality: play.quality,
+            page: p,
+            pageCount: pages.length,
+            durationSec: dur,
+            segments: play.segments,
+            truncatedAtSec,
+        };
+        if (useCache) {
+            writeShotsCache(cacheKey, result);
+            pruneShots();
+        }
+        return result;
     }
     finally {
         fs.rmSync(tmp, { recursive: true, force: true });
     }
-    const upName = v.owner?.name ? String(v.owner.name) : undefined;
-    return {
-        bvid,
-        title: String(v.title ?? ''),
-        up: upName,
-        path: sheet,
-        cols,
-        rows,
-        cellWidth: cw,
-        cellHeight: ch,
-        timesSec: times,
-        quality: play.quality,
-        page: p,
-        pageCount: pages.length,
-        durationSec: dur,
-        segments: play.segments,
-        truncatedAtSec: play.segments > 1 ? span : undefined,
-    };
 }
 /** 收件箱条目（时间倒序）；翻到看过的水位就停，别为几条消息把请求打满 */
 async function pullInbox(kind, credential, since, pages = 2) {
