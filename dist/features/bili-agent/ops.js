@@ -68,6 +68,14 @@ function cred() {
         throw new BiliError('credential', msg(e));
     }
 }
+/**
+ * 工具输出要过 DSH 的 lossless JSON 检查：`undefined` 键会被 JSON 丢掉、`NaN` 会变 null，
+ * 序列化前后对不上，整次 bili_feed 判失败 —— 候选越多越容易撞上某条缺 stat / author 的
+ * （关注动态里转发、投稿类字段都不齐）。落池前把这类键去掉；缺值在 schema 里本来就可选。
+ */
+function compact(o) {
+    return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && !(typeof v === 'number' && !Number.isFinite(v))));
+}
 /** 搜索结果的标题带 <em> 高亮标签，去掉 */
 const plainTitle = (s) => String(s ?? '').replace(/<[^>]+>/g, '');
 /** 数字参数容错：NaN / 没给 → 默认值（再交给 clamp 收边界） */
@@ -110,7 +118,7 @@ export async function feed(opts = {}) {
             return;
         if (pool.some((x) => x.bvid === c.bvid))
             return;
-        pool.push(c);
+        pool.push(compact(c));
     };
     // ① 它自己给的关键词（不给就跳过这一路）
     for (const kw of keywords) {
