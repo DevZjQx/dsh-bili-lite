@@ -627,12 +627,15 @@ function drafts(): DraftTool[] {
     {
       name: 'bili_interact',
       description:
-        '点赞一条视频，或关注它的 UP。同样必须先 mode=dry。'
-        + '护栏：每天有额度、同一目标同一种互动 7 天一次；undo=true 是取消（不占额度、不判重）；不能关注自己。',
+        '点赞一条视频、关注它的 UP，或给它投币。同样必须先 mode=dry。'
+        + '护栏：每天有互动额度、同一目标同一种互动 7 天一次；undo=true 是取消（不占额度、不判重）；不能关注自己。'
+        + '投币不可撤销（没有 undo）、消耗硬币：默认 1 枚，num=2 才投两枚（转载稿件只能 1 枚），每天另有 coinDaily 枚数上限；'
+        + 'dry 会给出硬币余额与这条已投几枚。',
       parameters: params({
-        target: str('BV 号（点赞 / 关注它的 UP），或 UP 的 UID（只用于关注）'),
-        action: oneOf('做什么', ['like', 'follow']),
-        undo: bool('取消赞 / 取关'),
+        target: str('BV 号（点赞 / 投币 / 关注它的 UP），或 UP 的 UID（只用于关注）'),
+        action: oneOf('做什么', ['like', 'follow', 'coin']),
+        undo: bool('取消赞 / 取关（投币没有 undo）'),
+        num: num('投币枚数：1 或 2，默认 1（只对 action=coin）'),
         mode: oneOf('dry = 只出计划；go = 真做', ['dry', 'go']),
       }, ['target', 'action', 'mode']),
       schema: obj({
@@ -658,6 +661,13 @@ function drafts(): DraftTool[] {
         counted: { type: 'boolean' },
         usedToday: { type: 'number' },
         limit: { type: 'number' },
+        coin: obj({
+          num: { type: 'number' },
+          balance: { type: 'number' },
+          already: { type: 'number' },
+          coinsToday: { type: 'number' },
+          coinLimit: { type: 'number' },
+        }, ['num', 'balance', 'coinsToday', 'coinLimit']),
         account: obj({ name: { type: 'string' }, mid: { type: 'string' } }, ['name', 'mid']),
       }, ['kind', 'object']),
       async execute(args) {
@@ -665,20 +675,24 @@ function drafts(): DraftTool[] {
         const mode = asStr(a.mode)
         const action = asStr(a.action)
         if (mode !== 'dry' && mode !== 'go') throw new Error('mode 只能是 dry 或 go —— 先 dry 看一眼')
-        if (action !== 'like' && action !== 'follow') throw new Error('action 只能是 like 或 follow')
+        if (action !== 'like' && action !== 'follow' && action !== 'coin') throw new Error('action 只能是 like / follow / coin')
         try {
-          return await interact({ target: String(a.target ?? ''), action, undo: asBool(a.undo), mode })
+          return await interact({ target: String(a.target ?? ''), action, undo: asBool(a.undo), num: asNum(a.num), mode })
         } catch (e) { fail(e) }
       },
       render(_args, value) {
-        const v = value as { kind: 'dry' | 'done'; object: { kind: 'video' | 'user'; bvid?: string; mid?: string; title?: string; upName?: string }; plan?: { usedToday: number; limit: number; remainingAfter: number; counted: boolean }; counted?: boolean; usedToday?: number; limit?: number }
+        const v = value as { kind: 'dry' | 'done'; object: { kind: 'video' | 'user'; bvid?: string; mid?: string; title?: string; upName?: string }; plan?: { usedToday: number; limit: number; remainingAfter: number; counted: boolean }; counted?: boolean; usedToday?: number; limit?: number; coin?: { num: number; balance: number; already?: number; coinsToday: number; coinLimit: number } }
         const ob = v.object
         const what = ob.kind === 'video' ? `《${ob.title}》（${ob.bvid}）` : `UID ${ob.mid}`
+        const coinLine = (c: typeof v.coin): string => c
+          ? `\n硬币：${v.kind === 'dry' ? `余额 ${c.balance} 枚，这次投 ${c.num} 枚` : `这次投了 ${c.num} 枚，余额约 ${c.balance} 枚`} · 今天已投 ${c.coinsToday}/${c.coinLimit} 枚`
+            + (v.kind === 'dry' ? `\n这条视频你已投：${c.already === undefined ? '没查到（交给 B站 兜底）' : `${c.already} 枚`}` : '')
+          : ''
         if (v.kind === 'dry') {
           const p = v.plan!
-          return text(`将要操作：${what}${ob.upName ? ` · UP ${ob.upName}` : ''}\n${p.counted ? `占额度：今天已互动 ${p.usedToday}/${p.limit}，做完剩 ${p.remainingAfter}` : '取消类：不占额度'}\n确认无误再调一次，mode=go。`)
+          return text(`将要操作：${what}${ob.upName ? ` · UP ${ob.upName}` : ''}${coinLine(v.coin)}\n${p.counted ? `占额度：今天已互动 ${p.usedToday}/${p.limit}，做完剩 ${p.remainingAfter}` : '取消类：不占额度'}\n确认无误再调一次，mode=go。`)
         }
-        return text(`✓ 已操作：${what}${v.counted ? ` · 今天已互动 ${v.usedToday}/${v.limit}` : '（取消类不占额度）'}`)
+        return text(`✓ 已操作：${what}${v.counted ? ` · 今天已互动 ${v.usedToday}/${v.limit}` : '（取消类不占额度）'}${coinLine(v.coin)}`)
       },
     },
 
@@ -749,7 +763,7 @@ function drafts(): DraftTool[] {
     {
       name: 'bili_history',
       description:
-        'kind=ledger：今天的额度账本（已写几条、互动几次、看过什么、是否熔断）。'
+        'kind=ledger：今天的额度账本（已写几条、互动几次、投了几枚硬币、看过什么、是否熔断）。'
         + 'kind=taste：最近 N 天的口味回顾（看过 / 评论 / 互动计数、常看的 UP、最近看过、动过手的）。'
         + '只读本地账本，不联网。',
       parameters: params({
@@ -766,6 +780,8 @@ function drafts(): DraftTool[] {
         writeLimit: { type: 'number' },
         interacted: arr('今天互动过的', obj({ at: { type: 'string' }, action: { type: 'string' }, note: { type: 'string' } }, ['at'])),
         interactLimit: { type: 'number' },
+        coinsUsed: { type: 'number' },
+        coinLimit: { type: 'number' },
         watchedToday: arr('今天看过的 BV', { type: 'string' }),
         ban: obj({ untilMs: { type: 'number' }, reason: { type: 'string' } }, ['untilMs']),
         days: { type: 'number' },
@@ -774,8 +790,8 @@ function drafts(): DraftTool[] {
         earliestDay: { type: 'string' },
         counts: obj({
           watched: { type: 'number' }, comments: { type: 'number' }, interactions: { type: 'number' },
-          likes: { type: 'number' }, follows: { type: 'number' },
-        }, ['watched', 'comments', 'interactions', 'likes', 'follows']),
+          likes: { type: 'number' }, follows: { type: 'number' }, coins: { type: 'number' },
+        }, ['watched', 'comments', 'interactions', 'likes', 'follows', 'coins']),
         topUps: arr('常看的 UP', obj({ name: { type: 'string' }, count: { type: 'number' } }, ['name', 'count'])),
         recentWatched: arr('最近看过', obj({
           at: { type: 'string' }, bvid: { type: 'string' }, title: { type: 'string' }, up: { type: 'string' },
@@ -797,14 +813,14 @@ function drafts(): DraftTool[] {
         if (v.kind === 'ledger') {
           const lines = [`今天（${v.day}）：已写 ${v.written.length}/${v.writeLimit} 条`]
           for (const x of v.written) lines.push(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.type} ${x.bvid ?? ''} ${x.note ?? x.title ?? ''}`)
-          lines.push(`互动：${v.interacted.length}/${v.interactLimit} 次`)
+          lines.push(`互动：${v.interacted.length}/${v.interactLimit} 次 · 硬币：今天已投 ${v.coinsUsed}/${v.coinLimit} 枚`)
           for (const x of v.interacted) lines.push(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.note ?? x.action ?? ''}`)
           lines.push(`看过：${v.watchedToday.length} 条${v.watchedToday.length ? `（${v.watchedToday.join(' ')}）` : ''}`)
           if (v.ban) lines.push(`⚠️ 风控熔断中：剩 ${Math.ceil((v.ban.untilMs - Date.now()) / 60000)} 分钟（${v.ban.reason ?? ''}）`)
           return text(lines.join('\n'))
         }
         const c = v.counts
-        const lines = [`口味回顾（最近 ${v.days} 天；账本共 ${v.totalEntries} 条${v.earliestDay ? `，最早到 ${v.earliestDay}` : ''}）`, `看过 ${c.watched} 条 · 评论 ${c.comments} 条 · 互动 ${c.interactions} 次（赞 ${c.likes} · 关注 ${c.follows}）`]
+        const lines = [`口味回顾（最近 ${v.days} 天；账本共 ${v.totalEntries} 条${v.earliestDay ? `，最早到 ${v.earliestDay}` : ''}）`, `看过 ${c.watched} 条 · 评论 ${c.comments} 条 · 互动 ${c.interactions} 次（赞 ${c.likes} · 关注 ${c.follows} · 投币 ${c.coins}）`]
         if (v.topUps.length) lines.push(`常看的 UP：${v.topUps.map((u: { name: string; count: number }) => `${u.name}×${u.count}`).join(' · ')}`)
         if (v.recentWatched.length) lines.push(`最近看过：\n${v.recentWatched.map((x: { at: string; bvid: string; title?: string }) => `  ${new Date(x.at).toLocaleDateString('sv-SE')} ${x.bvid} 《${x.title ?? '?'}》`).join('\n')}`)
         if (v.touched.length) {

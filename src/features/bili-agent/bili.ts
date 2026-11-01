@@ -20,16 +20,16 @@
 //   bun bili.ts comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
 //                                       发一条评论；--reply 回到某条评论下面
 //   bun bili.ts inbox [--n 5] [--all] 收件箱：谁 @ 了你 / 谁回了你（只读）
-//   bun bili.ts interact <BV|UID> --like | --follow [--undo] [--dry|--go]
-//                                       点赞 / 关注（一次一件；同样先 --dry 再 --go）
+//   bun bili.ts interact <BV|UID> --like | --follow | --coin [--undo] [--num 1|2] [--dry|--go]
+//                                       点赞 / 关注 / 投币（一次一件；同样先 --dry 再 --go；投币不可撤）
 //   bun bili.ts ledger                今天的额度账本
 //   bun bili.ts taste [--days 30]     口味回顾：看过的 / 常看的 UP / 动过手的（只读，自己判断）
 //   bun bili.ts schedule …            自己排作息 / 定时任务（add / list / drop / clear）
 //
 // 安全约定（写死在代码里，不靠自觉）：
 //   · 写操作必须显式 --dry（只打印）或 --go（真的发），拒绝裸跑
-//   · 每天评论 ≤ quota.writeDaily（默认 10）、互动 ≤ quota.interactDaily（默认 10）；
-//     同一视频 7 天内同一种评论/互动只做一次（取消赞 / 取关不占额度）
+//   · 每天评论 ≤ quota.writeDaily（默认 10）、互动 ≤ quota.interactDaily（默认 10）、投币 ≤ quota.coinDaily 枚（默认 3）；
+//     同一视频 7 天内同一种评论/互动只做一次（取消赞 / 取关不占额度；投币无取消）
 //   · 两次请求至少隔 risk.minGapMs（默认 1200ms）；撞 412/风控码 → 熔断退避（lib/bilibili.ts）
 //   · 凭据只从 ~/.dsh/bili-lite-work/credentials.json 读，永远不回显
 //

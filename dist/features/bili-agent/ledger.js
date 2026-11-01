@@ -21,6 +21,10 @@ export function interactionsToday() {
     return readLedger().log.filter((x) => x.type === 'interact' && !x.undo
         && new Date(x.at).toLocaleDateString('sv-SE') === today());
 }
+/** 今天投出去的硬币总共几枚（投币额度按枚算；老记录没有 coins 就当 0） */
+export function coinsToday() {
+    return interactionsToday().reduce((n, x) => n + (x.action === 'coin' ? Number(x.coins ?? 0) || 0 : 0), 0);
+}
 /** 同一个目标、同一种互动，days 天内做过没有 —— 看最后一条记录：
  *  最后一次是取消（undo）→ 现在没这个互动，不算；否则按时间判 days 天。
  *  这样「赞 → 取消 → 再赞」不会被 7 天前的旧赞卡死，取消也仍然是纠正、不是在刷。 */

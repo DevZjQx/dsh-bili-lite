@@ -22,12 +22,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
-import { apiGet, apiPost, explainCode, loadCred, whoami, wbi, getFollowingFeed, searchUsers, getSpaceVideos, getFollowings, getView, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getMsgFeed, getThreadReplies, banUntil, banWhy, getPlayUrl, UA } from '../../lib/bilibili.ts'
+import { apiGet, apiPost, explainCode, loadCred, whoami, wbi, getFollowingFeed, searchUsers, getSpaceVideos, getFollowings, getView, getPlayerInfo, pickSubtitle, getSubtitleLines, getDanmakuBrief, getMsgFeed, getThreadReplies, banUntil, banWhy, getPlayUrl, getCoinedCount, UA } from '../../lib/bilibili.ts'
 import type { Cred, ApiEnvelope, VideoView, NavResp, MsgFeedRow } from '../../lib/bilibili.ts'
 import { requireFfmpeg, runFfmpegAsync, ffmpegCaps, findFfmpegFont, isFfmpegAbort, probeVideoSize } from '../../lib/ffmpeg.ts'
 import { formatClock, formatClockFine } from '../../lib/timecode.ts'
 import { SHOTS_DIR } from '../../config/paths.ts'
-import { seenSet, ledgerAppend, readLedger, writesToday, interactionsToday, interactedWithin, commentedWithin, repliedWithin, today } from './ledger.ts'
+import { seenSet, ledgerAppend, readLedger, writesToday, interactionsToday, coinsToday, interactedWithin, commentedWithin, repliedWithin, today } from './ledger.ts'
 import { config, DEFAULTS } from '../../config/store.ts'
 import { readPlan, addEntry, dropEntry, clearPlan, fmtWhen, expiryText, MAX_PENDING } from '../../lib/schedule.ts'
 import type { ScheduleEntry } from '../../lib/schedule.ts'
@@ -1741,12 +1741,27 @@ export async function comment(opts: CommentOptions): Promise<CommentDry | Commen
 }
 
 export interface InteractOptions {
-  /** BV 号（点赞）或 mid / 名字（关注） */
+  /** BV 号（点赞 / 投币）或 mid / 名字（关注） */
   target: string
-  action: 'like' | 'follow'
-  /** 取消赞 / 取关：不占额度，也不参与 7 天判重 */
+  action: 'like' | 'follow' | 'coin'
+  /** 取消赞 / 取关：不占额度，也不参与 7 天判重（投币没有 undo） */
   undo?: boolean
+  /** 投币枚数（只对 coin 有意义，1 或 2，默认 1） */
+  num?: number
   mode: 'dry' | 'go'
+}
+
+/** 投币的信息面：硬币稀缺又不可逆，dry 里它必须看见余额、这条投过几枚、今天还剩几枚 */
+export interface CoinInfo {
+  /** 这次投几枚 */
+  num: number
+  /** 投币前的硬币余额 */
+  balance: number
+  /** 投币前这条视频自己已经投过几枚；undefined = 没查到（不挡，交给 B站 兜底） */
+  already?: number
+  /** 今天已投出的硬币枚数 / 每天上限 */
+  coinsToday: number
+  coinLimit: number
 }
 
 export interface InteractDry {
@@ -1759,6 +1774,8 @@ export interface InteractDry {
     title?: string
     upName?: string
   }
+  /** 只有投币才有 */
+  coin?: CoinInfo
 }
 
 export interface InteractDone {
@@ -1767,6 +1784,8 @@ export interface InteractDone {
   counted: boolean
   usedToday: number
   limit: number
+  /** 只有投币才有（余额 / 今日枚数已是做完之后的值） */
+  coin?: CoinInfo
   account?: { name: string; mid: string }
 }
 
@@ -1774,11 +1793,16 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
   const target = String(opts.target ?? '').trim()
   const action = opts.action
   const undo = opts.undo === true
-  if (action !== 'like' && action !== 'follow') throw new BiliError('usage', '一次只做一件事：like 或 follow')
+  if (action !== 'like' && action !== 'follow' && action !== 'coin') throw new BiliError('usage', '一次只做一件事：like / follow / coin')
   if (opts.mode !== 'dry' && opts.mode !== 'go') throw new BiliError('usage', '写操作必须显式 dry 或 go', '先 dry 看一眼，再 go 真做')
+  if (action === 'coin' && undo) throw new BiliError('usage', '硬币投出去就收不回来 —— 投币没有 undo', '想表达喜欢用 like；投币是单向的')
   const isBv = BV_RE.test(target)
   if (!isBv && !(action === 'follow' && /^\d{1,12}$/.test(target))) {
-    throw new BiliError('usage', `目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}`)
+    throw new BiliError('usage', action === 'coin' ? '投币只认视频：目标要写成 BV 号' : `目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}`)
+  }
+  const num = action === 'coin' ? (opts.num === undefined ? 1 : Number(opts.num)) : 0
+  if (action === 'coin' && num !== 1 && num !== 2) {
+    throw new BiliError('usage', '投币枚数只能是 1 或 2（同一稿件最多 2 枚）', '不写 --num 就是 1 枚 —— 默认不替它加码')
   }
 
   const cfg = config()
@@ -1787,7 +1811,7 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
   const miss = (['sessdata', 'bili_jct'] as const).filter((k) => !credential[k])
   if (miss.length) throw new BiliError('credential', `凭据缺 ${miss.join(', ')} —— 写操作必须要`, '去设置页「B站养鱼」补一次 cookie')
 
-  // 视频类互动要拿 aid（点赞接口只认 aid）与 UP 的 mid（关注）；只读，dry 也要这一步
+  // 视频类互动要拿 aid（点赞 / 投币接口只认 aid）、版权与 UP 的 mid（关注）；只读，dry 也要这一步
   const v: VideoView = isBv ? await getView(target, credential) : {}
   const fid = action !== 'follow' ? '' : (isBv ? String(v.owner?.mid ?? '') : target)
   if (action === 'follow' && !fid) throw new BiliError('notfound', '拿不到 UP 的 mid', '用 UID 直接关注')
@@ -1795,14 +1819,55 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
     throw new BiliError('usage', '这是你自己（与主人共用的号）—— 不能关注自己')
   }
 
+  // 转载稿件只收 1 枚：本地先挡（发出去只会换来 34005）
+  if (action === 'coin') {
+    if (Number(v.copyright) === 2 && num > 1) {
+      throw new BiliError('usage', '转载稿件只能投 1 枚硬币', '加 --num 1 再来 —— B站对转载稿件不收第 2 枚')
+    }
+  }
+
   const key = action === 'follow' ? `uid:${fid}` : target
   const limit = Math.max(0, Number(cfg.quota?.interactDaily ?? DEFAULTS.quota.interactDaily))
+  const coinLimit = Math.max(0, Number(cfg.quota?.coinDaily ?? DEFAULTS.quota.coinDaily))
   const acted = interactionsToday()
+  const coinsUsed = coinsToday()
+  const didWord = action === 'follow' ? '关注' : action === 'coin' ? '投币' : '点赞'
+  // 判重那句话要读得通：投币 → 投过币、点赞 → 点过赞
+  const dupWord = action === 'follow' ? '关注过' : action === 'coin' ? '投过币' : '点过赞'
   if (!undo) {
     if (acted.length >= limit) throw new BiliError('guard', `今天的互动额度用完了（${acted.length}/${limit}）`, '明天再说 —— 克制是功能，不是 bug')
-    if (interactedWithin(key, action)) {
-      throw new BiliError('guard', `这个${action === 'follow' ? ' UP' : '视频'} 7 天内已经${action === 'follow' ? '关注' : '点赞'}过`, `判重按 ${action === 'follow' ? 'mid' : 'BV 号'}算`)
+    if (action === 'coin' && coinsUsed + num > coinLimit) {
+      throw new BiliError('guard', `今天的硬币额度不够（已投 ${coinsUsed}/${coinLimit} 枚，这次要投 ${num} 枚）`, '硬币是攒出来的 —— 明天再说')
     }
+    if (interactedWithin(key, action)) {
+      throw new BiliError('guard', `这个${action === 'follow' ? ' UP' : '视频'} 7 天内已经${dupWord}`, `判重按 ${action === 'follow' ? 'mid' : 'BV 号'}算`)
+    }
+  }
+
+  // 投币的预检：余额 / 这条已投几枚。dry 也要走 —— 这两条恰恰是它做决定前该看见的
+  let coin: CoinInfo | undefined
+  let navPre: NavResp | undefined
+  if (action === 'coin') {
+    navPre = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred: credential })
+    if (navPre.code !== 0 || navPre.data?.isLogin !== true) {
+      throw new BiliError('auth', `登录态失效：${explainCode(navPre.code)}`, '重抄 cookie 再来')
+    }
+    // 自己的稿件：以 nav 回执的 mid 为准（配置里的 self 只是快照，换过号会指错人）
+    const ownMid = String(navPre.data?.mid ?? cfg.self?.mid ?? '')
+    if (ownMid && ownMid === String(v.owner?.mid ?? '')) {
+      throw new BiliError('guard', '这是你和主人共用的号 —— 不能给自己的稿件投币', '换一条别人的视频')
+    }
+    const balance = Math.max(0, Number(navPre.data?.money ?? 0) || 0)
+    if (balance < num) {
+      throw new BiliError('guard', `硬币不够：余额 ${balance} 枚，这次要投 ${num} 枚`, '攒够了再来 —— 投币不赊账')
+    }
+    // 查不到已投状态不拦：B站自己会用 34005 兜底，别让一个读接口的小毛病把整件事卡死
+    let already: number | undefined
+    try { already = await getCoinedCount(String(v.aid ?? ''), credential) } catch { already = undefined }
+    if (already) {
+      throw new BiliError('guard', `这条视频你已经投过 ${already} 枚硬币（同一稿件最多 2 枚）`, '不追加 —— 想表达喜欢就 like')
+    }
+    coin = { num, balance, already, coinsToday: coinsUsed, coinLimit }
   }
 
   let url: string
@@ -1810,16 +1875,22 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
   if (action === 'like') {
     url = 'https://api.bilibili.com/x/web-interface/archive/like'
     body = { aid: String(v.aid), like: undo ? '2' : '1', csrf: credential.bili_jct }
+  } else if (action === 'coin') {
+    // select_like 恒为 0：点赞是它自己的决定，不借投币顺手替它点
+    url = 'https://api.bilibili.com/x/web-interface/coin/add'
+    body = { aid: String(v.aid), multiply: String(num), select_like: '0', csrf: credential.bili_jct }
   } else {
     url = 'https://api.bilibili.com/x/relation/modify'
     body = { fid, act: undo ? '2' : '1', re_src: '11', csrf: credential.bili_jct }
   }
   const referer = isBv ? `https://www.bilibili.com/video/${target}/` : 'https://space.bilibili.com/'
 
+  // 投币的预检已经问过 nav：账号名用回执里的，比配置里的快照可信
+  const accountName = String(navPre?.data?.uname ?? cfg.self?.name ?? '')
   const plan: WritePlan = {
     url, method: 'POST', referer,
     form: { ...body, csrf: '***' },
-    account: cfg.self?.name ? String(cfg.self.name) : undefined,
+    account: accountName || undefined,
     counted: !undo,
     usedToday: acted.length,
     limit,
@@ -1833,10 +1904,10 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
     upName: isBv && action === 'follow' ? (v.owner?.name ? String(v.owner.name) : undefined) : undefined,
   }
 
-  if (opts.mode === 'dry') return { kind: 'dry', plan, object }
+  if (opts.mode === 'dry') return { kind: 'dry', plan, object, ...(coin ? { coin } : {}) }
 
-  // --go：先校验登录态（cookie 失效就别白发一次写请求）
-  const nav = await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred: credential })
+  // --go：先校验登录态（cookie 失效就别白发一次写请求）；投币的预检已经问过 nav，别问第二次
+  const nav = navPre ?? await apiGet<NavResp>('https://api.bilibili.com/x/web-interface/nav', { cred: credential })
   if (nav.code !== 0 || nav.data?.isLogin !== true) {
     throw new BiliError('auth', `登录态失效：${explainCode(nav.code)}`, '重抄 cookie 再来')
   }
@@ -1845,13 +1916,24 @@ export async function interact(opts: InteractOptions): Promise<InteractDry | Int
   }
   const j = await apiPost(url, body, { cred: credential, referer })
   if (Number(j.code) !== 0) {
-    throw new BiliError('upstream', `${undo ? '取消' : ''}${action === 'follow' ? '关注' : '点赞'}失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`)
+    throw new BiliError('upstream', `${undo ? '取消' : ''}${didWord}失败：${explainCode(j.code)}${j.message ? `（B站原文：${j.message}）` : ''}`)
   }
-  ledgerAppend({ type: 'interact', action, undo: undo || undefined, target: key, bvid: isBv ? target : undefined, note: `${undo ? '取消' : ''}${action === 'follow' ? '关注' : '点赞'} ${isBv ? target : fid}` })
-  return { kind: 'done', object, counted: !undo, usedToday: undo ? acted.length : acted.length + 1, limit, account: loginOf(nav) }
+  const note = action === 'coin'
+    ? `投币 ${num} 枚 ${target}`
+    : `${undo ? '取消' : ''}${didWord} ${isBv ? target : fid}`
+  ledgerAppend({
+    type: 'interact', action, undo: undo || undefined, target: key, bvid: isBv ? target : undefined,
+    coins: action === 'coin' ? num : undefined,
+    note,
+  })
+  return {
+    kind: 'done', object, counted: !undo, usedToday: undo ? acted.length : acted.length + 1, limit,
+    ...(coin ? { coin: { ...coin, coinsToday: coinsUsed + num, balance: coin.balance - num } } : {}),
+    account: loginOf(nav),
+  }
 }
 
-/** nav 回执 → 登录态摘要（两个写操作都要报一句「登录态 ✓ 谁」） */
+/** nav 回执 → 登录态摘要（写操作做完都要报一句「登录态 ✓ 谁」） */
 function loginOf(nav: NavResp): { name: string; mid: string } | undefined {
   if (!nav.data?.uname) return undefined
   return { name: String(nav.data.uname), mid: String(nav.data.mid ?? '') }
@@ -1971,6 +2053,9 @@ export interface LedgerSnapshot {
   writeLimit: number
   interacted: Array<{ at: string; action?: string; note?: string }>
   interactLimit: number
+  /** 今天投出去的硬币枚数 / 每天上限（投币额度按「枚」算，不按条目） */
+  coinsUsed: number
+  coinLimit: number
   /** 今天看过哪些（账本顺序，按 BV） */
   watchedToday: string[]
   /** 风控熔断中：到什么时候、为什么 */
@@ -1982,7 +2067,7 @@ export interface TasteSnapshot {
   days: number
   totalEntries: number
   earliestDay?: string
-  counts: { watched: number; comments: number; interactions: number; likes: number; follows: number }
+  counts: { watched: number; comments: number; interactions: number; likes: number; follows: number; coins: number }
   /** 本次「最近看过 / 动过手」各列几条（收过边界后的真实值） */
   limit: number
   /** 看得最多的 UP（最多 10 位） */
@@ -2004,6 +2089,7 @@ export function history(q: HistoryQuery): LedgerSnapshot | TasteSnapshot {
     const led = readLedger()
     const limit = Math.max(0, Number(config().quota?.writeDaily ?? DEFAULTS.quota.writeDaily))
     const ilimit = Math.max(0, Number(config().quota?.interactDaily ?? DEFAULTS.quota.interactDaily))
+    const climit = Math.max(0, Number(config().quota?.coinDaily ?? DEFAULTS.quota.coinDaily))
     const banned = banUntil()
     return {
       kind: 'ledger',
@@ -2012,6 +2098,8 @@ export function history(q: HistoryQuery): LedgerSnapshot | TasteSnapshot {
       writeLimit: limit,
       interacted: interactionsToday().map((x) => ({ at: x.at, action: x.action, note: x.note })),
       interactLimit: ilimit,
+      coinsUsed: coinsToday(),
+      coinLimit: climit,
       watchedToday: led.log
         .filter((x) => x.type === 'watch' && new Date(x.at).toLocaleDateString('sv-SE') === today())
         .map((x) => String(x.bvid ?? '')),
@@ -2042,7 +2130,7 @@ export function history(q: HistoryQuery): LedgerSnapshot | TasteSnapshot {
     days,
     totalEntries: log.length,
     earliestDay: log.length ? new Date(log[0].at).toLocaleDateString('sv-SE') : undefined,
-    counts: { watched: watched.length, comments: comments.length, interactions: acts.length, likes: byAct('like'), follows: byAct('follow') },
+    counts: { watched: watched.length, comments: comments.length, interactions: acts.length, likes: byAct('like'), follows: byAct('follow'), coins: byAct('coin') },
     limit: lim,
     topUps: [...ups].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, count]) => ({ name, count })),
     recentWatched: watched.slice(-lim).reverse().map((x) => ({ at: x.at, bvid: String(x.bvid ?? ''), title: x.title, up: x.up })),

@@ -67,8 +67,8 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   inbox [--n 5] [--all]
                           收件箱：谁 @ 了你 / 谁回了你（只读；默认只看新的）
                           --all 连看过的也列出来；回的时候用它给的那行命令
-  interact <BV|UID> --like | --follow [--undo] [--dry|--go]
-                          点赞 / 关注（--undo 取消赞、取关）
+  interact <BV|UID> --like | --follow | --coin [--undo] [--num 1|2] [--dry|--go]
+                          点赞 / 关注 / 投币（--undo 取消赞、取关；投币没有 undo，硬币收不回来）
                           一次只做一件；写操作必须 --dry 或 --go
   ledger                  今天的额度账本
   taste [--days 30] [--n 15]
@@ -79,8 +79,8 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
   schedule list           看排了什么（最近投过的也在）
   schedule drop <id>      撤一条；schedule clear 全撤（撤完宿主恢复兜底节拍）
 安全约定（代码强制）：
-  · 写操作必须显式 --dry 或 --go；评论 + 回复每天合计 ≤${DEFAULTS.quota.writeDaily} 条、互动 ≤${DEFAULTS.quota.interactDaily} 次；
-    同一视频 7 天内只发一条新评论、同一条评论 7 天内只回一次（取消类不占额度）
+  · 写操作必须显式 --dry 或 --go；评论 + 回复每天合计 ≤${DEFAULTS.quota.writeDaily} 条、互动 ≤${DEFAULTS.quota.interactDaily} 次，投币另外 ≤${DEFAULTS.quota.coinDaily} 枚；
+    同一视频 7 天内只发一条新评论、同一条评论 7 天内只回一次、同一种互动只做一次（取消类不占额度）
   · 撞 412/风控码自动熔断 5–30 分钟；凭据永不回显`
 
 export async function cmdSelftest(asJson: boolean): Promise<void> {
@@ -556,29 +556,32 @@ export async function cmdComment(flags: Flags, positional: string[]): Promise<vo
 // ── interact：点赞 / 关注 —— 对一条视频（或它的 UP）的公开互动 ────────────
 // 两种都算「说出去的信号」，跟评论一样受额度与判重约束；取消类（取消赞 / 取关）
 // 是在纠正前面的动作，不占额度也不判重 —— 但仍要 --dry / --go 与同一套节流熔断。
-const INTERACT_USAGE = `用法: bun bili.ts interact <BV|UID> (--like | --follow) [--undo] [--dry|--go]
+const INTERACT_USAGE = `用法: bun bili.ts interact <BV|UID> (--like | --follow | --coin) [--undo] [--num 1|2] [--dry|--go]
   --like        点赞（--undo = 取消赞）
   --follow      关注这条视频的 UP（目标写成 UID 也行；--undo = 取关）
+  --coin        给这条视频投币（默认 1 枚，--num 2 才投 2 枚；硬币收不回来，没有 --undo）
   一次只做一件事；写操作必须 --dry（只打印）或 --go（真的做）`
 
-const ACT_TEXT: Record<string, string> = { like: '点赞', follow: '关注' }
+const ACT_TEXT: Record<string, string> = { like: '点赞', follow: '关注', coin: '投币' }
 
 export async function cmdInteract(flags: Flags, positional: string[]): Promise<void> {
   const target = String(positional[0] ?? '')
   const dry = flags.has('dry') || flags.get('dry') === true
   const go = flags.has('go') || flags.get('go') === true
   const undo = flags.has('undo') || flags.get('undo') === true
-  const picked = ['like', 'follow'].filter((k) => flags.has(k))
-  if (picked.length !== 1) { console.error(`✗ 一次只做一件事（--like / --follow 选一个）\n\n${INTERACT_USAGE}`); process.exit(2) }
+  const picked = ['like', 'follow', 'coin'].filter((k) => flags.has(k))
+  if (picked.length !== 1) { console.error(`✗ 一次只做一件事（--like / --follow / --coin 选一个）\n\n${INTERACT_USAGE}`); process.exit(2) }
   if (dry && go) { console.error('--dry 和 --go 二选一'); process.exit(2) }
   if (!dry && !go) { console.error('拒绝裸跑：写操作必须显式 --dry（只打印）或 --go（真的做）'); process.exit(2) }
   const action = picked[0]
   const isBv = BV_RE.test(target)
   if (!isBv && !(action === 'follow' && /^\d{1,12}$/.test(target))) {
-    console.error(`✗ 目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}\n\n${INTERACT_USAGE}`)
+    console.error(`✗ ${action === 'coin' ? '投币只认视频：目标要写成 BV 号' : `目标要写成 BV 号${action === 'follow' ? '（或直接写 UP 的 UID）' : ''}`}\n\n${INTERACT_USAGE}`)
     process.exit(2)
   }
-  const res = await interact({ target, action: action as 'like' | 'follow', undo, mode: dry ? 'dry' : 'go' })
+  if (undo && action === 'coin') { console.error(`✗ 硬币投出去就收不回来 —— 投币没有 --undo\n\n${INTERACT_USAGE}`); process.exit(2) }
+  const num = action === 'coin' && flags.has('num') ? Number(flags.get('num')) : undefined
+  const res = await interact({ target, action: action as 'like' | 'follow' | 'coin', undo, num, mode: dry ? 'dry' : 'go' })
 
   const what = `${undo ? '取消' : ''}${ACT_TEXT[action]}`
   const ob = res.object
@@ -588,6 +591,11 @@ export async function cmdInteract(flags: Flags, positional: string[]): Promise<v
   if (res.kind === 'dry') {
     console.log(`=== 将要${what}（--dry，没有发）===`)
     console.log(`  对象：${where}${upSuffix}`)
+    if (res.coin) {
+      const c = res.coin
+      console.log(`  硬币：余额 ${c.balance} 枚 · 这次投 ${c.num} 枚 · 今天已投 ${c.coinsToday}/${c.coinLimit} 枚`)
+      console.log(`  这条视频你已投：${c.already === undefined ? '没查到（接口没回，交给 B站 兜底）' : `${c.already} 枚`}`)
+    }
     console.log(`  POST ${res.plan.url}`)
     console.log(`  ${new URLSearchParams(res.plan.form).toString()}`)
     console.log(`  账号：${res.plan.account || '(未体检)'} · ${undo ? '取消类不占额度' : `今天已互动 ${res.plan.usedToday}/${res.plan.limit} · 做完剩 ${res.plan.remainingAfter}`}`)
@@ -596,6 +604,7 @@ export async function cmdInteract(flags: Flags, positional: string[]): Promise<v
   }
   if (res.account) console.log(`登录态 ✓ ${res.account.name}（mid ${res.account.mid}）`)
   console.log(`✓ 已${what}：${where}${upSuffix}${undo ? '' : ` · 今天已互动 ${res.usedToday}/${res.limit}`}`)
+  if (res.coin) console.log(`  硬币：这次投了 ${res.coin.num} 枚 · 今天已投 ${res.coin.coinsToday}/${res.coin.coinLimit} 枚 · 余额约 ${res.coin.balance} 枚`)
 }
 
 // ── schedule：它自己排作息 / 定时任务（写到 lib/schedule 的唯一真相；到点由宿主投「计划拍」）──
@@ -668,7 +677,7 @@ export function cmdTaste(flags: Flags): void {
 
   console.log(`口味回顾（最近 ${res.days} 天；账本共 ${res.totalEntries} 条${res.earliestDay ? `，最早到 ${res.earliestDay}` : ''}）`)
   const c = res.counts
-  console.log(`看过 ${c.watched} 条 · 评论 ${c.comments} 条 · 互动 ${c.interactions} 次${c.interactions ? `（赞 ${c.likes} · 关注 ${c.follows}）` : ''}`)
+  console.log(`看过 ${c.watched} 条 · 评论 ${c.comments} 条 · 互动 ${c.interactions} 次${c.interactions ? `（赞 ${c.likes} · 关注 ${c.follows} · 投币 ${c.coins}）` : ''}`)
   if (!c.watched && !c.comments && !c.interactions) {
     console.log('\n（这段时间还没留下记录 —— 去看几条、写点什么，再回来回顾）')
     return
@@ -704,7 +713,8 @@ export function cmdLedger(): void {
     console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.type} ${x.bvid} ${x.note ?? x.title ?? ''}`)
   }
   const byAct = (a: string): number => res.interacted.filter((x) => x.action === a).length
-  console.log(`互动：${res.interacted.length}/${res.interactLimit} 次${res.interacted.length ? `（赞 ${byAct('like')} · 关注 ${byAct('follow')}）` : ''}`)
+  console.log(`互动：${res.interacted.length}/${res.interactLimit} 次${res.interacted.length ? `（赞 ${byAct('like')} · 关注 ${byAct('follow')} · 投币 ${byAct('coin')}）` : ''}`)
+  console.log(`硬币：今天已投 ${res.coinsUsed}/${res.coinLimit} 枚`)
   for (const x of res.interacted) console.log(`  - ${new Date(x.at).toTimeString().slice(0, 5)} ${x.note ?? x.action}`)
   console.log(`看过：${res.watchedToday.length} 条${res.watchedToday.length ? '（' + res.watchedToday.join(' ') + '）' : ''}`)
   if (res.ban) console.log(`⚠️ 风控熔断中：剩 ${Math.ceil((res.ban.untilMs - Date.now()) / 60000)} 分钟（${res.ban.reason}）`)

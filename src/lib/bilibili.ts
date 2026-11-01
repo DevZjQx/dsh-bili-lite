@@ -64,6 +64,8 @@ export interface VideoView {
   desc?: string
   pubdate?: number
   duration?: number
+  /** 1 = 自制，2 = 转载（转载稿件只收 1 枚硬币） */
+  copyright?: number
   owner?: VideoOwner
   stat?: VideoStat
   pages?: VideoPage[]
@@ -84,6 +86,17 @@ export async function getView(bvid: string, cred: Cred): Promise<VideoView> {
   const j = await apiGet<ViewResp>(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { cred, ttlMs: 24 * 3600_000 })
   if (j.code !== 0) throw new Error(`查不到视频 ${bvid}：${explainCode(j.code)}${j.message ? '（' + j.message + '）' : ''}`)
   return j.data ?? {}
+}
+
+/** 这条视频我自己投过几枚（0 / 1 / 2）。B 站只认登录号自己的投币记录 ——
+ *  没登录会失败，调用方自己决定是兜底还是拦住。不缓存：投完立刻要能读到新值 */
+export async function getCoinedCount(aid: number | string, cred: Cred): Promise<number> {
+  const j = await apiGet<ApiEnvelope<{ multiply?: number }>>(
+    `https://api.bilibili.com/x/web-interface/archive/coins?aid=${aid}&type=1`,
+    { cred },
+  )
+  if (Number(j.code) !== 0) throw new Error(`查投币状态失败：${explainCode(j.code)}`)
+  return Math.max(0, Number(j.data?.multiply ?? 0) || 0)
 }
 
 /** 真的去 nav 验证一次登录态，返回 { mid, name }（写凭据前后都该走这里，不做离线格式检查） */
@@ -200,6 +213,9 @@ const CODE_HINTS: Record<string, string> = {
   '65004': '取消赞失败 —— 本来就没点过赞',
   '22003': '这个用户不存在',
   '22004': '不能关注自己 —— 这是你和主人共用的号',
+  '34003': '不能给自己的稿件投币 —— 这是你和主人共用的号',
+  '34004': '硬币不足 —— 余额不够这次要投的枚数',
+  '34005': '这条视频的硬币已经投满（同一稿件最多 2 枚）',
 }
 export const explainCode = (code: number | string | undefined): string =>
   CODE_HINTS[String(code)] ?? `code=${code}（未知返回码）`

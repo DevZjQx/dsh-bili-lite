@@ -10,7 +10,7 @@ import { CFG_FILE } from './paths.ts'
 export interface PersonaConfig { name: string }
 export interface SelfConfig { mid: string; name: string }
 export interface PulseConfig { everyMin: number }
-export interface QuotaConfig { writeDaily: number; interactDaily: number }
+export interface QuotaConfig { writeDaily: number; interactDaily: number; coinDaily: number }
 export interface ShareConfig { enabled: boolean }
 export interface RiskConfig { minGapMs: number }
 
@@ -21,7 +21,7 @@ export interface Config {
   self: SelfConfig
   /** 兑底节拍：它没排计划时，每这么久问一拍「现在想干嘛」（排了计划宿主只按计划投） */
   pulse: PulseConfig
-  /** 每天最多发几条评论 / 做几次互动（赞·币·关注） */
+  /** 每天最多发几条评论 / 做几次互动（赞·关注·投币）/ 投出几枚硬币 */
   quota: QuotaConfig
   share: ShareConfig
   risk: RiskConfig
@@ -31,7 +31,7 @@ export const DEFAULTS: Config = {
   persona: { name: '' },
   self: { mid: '', name: '' },
   pulse: { everyMin: 60 },
-  quota: { writeDaily: 10, interactDaily: 10 },
+  quota: { writeDaily: 10, interactDaily: 10, coinDaily: 3 },
   share: { enabled: true },
   risk: { minGapMs: 1200 },
 }

@@ -63,6 +63,8 @@ export function registerSettings({ route, isTrusted, cliPath }: SettingsDeps): v
     cur.quota.writeDaily = Number.isFinite(wd) ? Math.min(10, Math.max(0, wd)) : DEFAULTS.quota.writeDaily
     const id = Number(cur.quota.interactDaily)
     cur.quota.interactDaily = Number.isFinite(id) ? Math.min(50, Math.max(0, id)) : DEFAULTS.quota.interactDaily
+    const cd = Number(cur.quota.coinDaily)
+    cur.quota.coinDaily = Number.isFinite(cd) ? Math.min(20, Math.max(0, cd)) : DEFAULTS.quota.coinDaily
     cur.risk.minGapMs = Math.min(60000, Math.max(300, Number(cur.risk.minGapMs) || DEFAULTS.risk.minGapMs))
     cur.persona = { name: String(cur.persona?.name ?? '').trim().slice(0, 24) }   // 名字只用于抬头：去掉空白、限长
     writeConfig(cur)   // 心跳每拍都重新读配置 → 保存即生效，无需任何回调 ✓

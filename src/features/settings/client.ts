@@ -85,7 +85,8 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
       { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）；留空就不点名。人设正文仍写 ~/.dsh/bili-lite-work/persona.md", kind: "text" },
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
       { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "评论 + 回复合计，默认 10（上限 10）", kind: "text" },
-      { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 关注合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
+      { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 关注 / 投币合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
+      { group: "克制", path: ["quota", "coinDaily"], label: "每天最多投几枚硬币", hint: "按「枚」算，默认 3（上限 20）；默认一次 1 枚，2 枚要它自己明说（写死）", kind: "text" },
       { group: "克制", path: ["risk", "minGapMs"], label: "请求间隔（毫秒）", hint: "默认 1200；连击是最容易被判机器人的特征 ✗", kind: "text" },
     ];
 

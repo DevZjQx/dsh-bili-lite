@@ -14,8 +14,10 @@ export interface LedgerEntry {
   bvid?: string
   /** interact 的判重键：BV 号或 uid:<mid> */
   target?: string
-  /** interact 的动作：like / follow */
+  /** interact 的动作：like / follow / coin */
   action?: string
+  /** coin 专用：这次投出去几枚硬币（1 / 2）—— 投币额度按「枚」算，不按条目算 */
+  coins?: number
   /** comment 的回复目标：被回复的那条评论 rpid（顶层评论不填）—— 回复的判重按它算 */
   rpid?: number
   /** comment 的楼层根 rpid：回楼中楼时才有（顶层评论的回复两者相同） */
@@ -50,6 +52,11 @@ export function writesToday(): LedgerEntry[] {
 export function interactionsToday(): LedgerEntry[] {
   return readLedger().log.filter((x) => x.type === 'interact' && !x.undo
     && new Date(x.at).toLocaleDateString('sv-SE') === today())
+}
+
+/** 今天投出去的硬币总共几枚（投币额度按枚算；老记录没有 coins 就当 0） */
+export function coinsToday(): number {
+  return interactionsToday().reduce((n, x) => n + (x.action === 'coin' ? Number(x.coins ?? 0) || 0 : 0), 0)
 }
 
 /** 同一个目标、同一种互动，days 天内做过没有 —— 看最后一条记录：
