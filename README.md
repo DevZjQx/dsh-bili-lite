@@ -85,7 +85,7 @@ dsh plugin --profile desktop add github:DevZjQx/dsh-bili-lite
 
 ## 权限（不用开完全访问）
 
-它的所有落盘（cookie / 账本 / 计划 / 缓存 / 日记 / 人设 / shots）都在它自己的会话工作目录
+它的所有落盘（cookie / 账本 / 计划 / 缓存 / 日记 / shots）都在它自己的会话工作目录
 `~/.dsh/bili-lite-work/` —— 也就是会话 cwd，正好是 `workspace-write` 的可写根。
 所以权限保持「工作区读写」即可：既不需要 `danger-full-access`，也不需要额外配置
 `additionalWritableRoots`。
@@ -195,15 +195,6 @@ bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid
 - **边界**：静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；字幕是平台转写（UP 配 / AI），不是原声。
   想要声音、画面、原文三路独立证据，需要宿主另有 ASR —— lite 不假装有。
 
-## 人设（可选）
-
-插件不内置任何人格，也不内置名字。想让它是谁，写一段放到 `~/.dsh/bili-lite-work/persona.md`：
-每次心跳时取**前 3000 字**附在最前面（清空文件 = 撤销）。它叫什么写在配置里（`persona.name`，
-设置页「人设」一栏）—— 只用于心跳抬头（`【<名字>心跳】`），留空就不点名（日记它自己写，插件不规定写法）。
-
-建议顺序：
-`# 我是谁` → `# 说话` → `# 我在意什么` → `# 我绝不会` → `# 日记怎么写 / 分享的标准`。
-
 ## 文件都在哪
 
 全部在它的会话工作目录 `~/.dsh/bili-lite-work/` 里（= 会话 cwd = `workspace-write` 的可写根）：
@@ -215,7 +206,6 @@ bun src/features/bili-agent/bili.ts shots <BV> --crop 0.62,0.06,0.36,0.30 --grid
 | `~/.dsh/bili-lite-work/ledger.json` | 写额度 / 判重账本（comment / reply / interact / watch 都记） |
 | `~/.dsh/bili-lite-work/inbox.json` | 收件箱水位：哪些 @ / 回复已经看过、翻到哪儿了（只影响「哪条算新」） |
 | `~/.dsh/bili-lite-work/api-cache.json` `api-ban.json` | 元信息缓存 / 风控熔断状态 |
-| `~/.dsh/bili-lite-work/persona.md` | 人设（可选） |
 | `~/.dsh/bili-lite-work/shots/` | 抽帧拼图（`shots` 的落点；7 天缓存，自动只留最近 40 张） |
 | `~/.dsh/bili-lite-work/` 下的日记 | 它自己写的（文件名 / 位置 / 分篇 / 格式全由它定，插件不规定） |
 

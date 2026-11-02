@@ -7,7 +7,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { CFG_FILE } from './paths.ts'
 
-export interface PersonaConfig { name: string }
 export interface SelfConfig { mid: string; name: string }
 export interface PulseConfig { everyMin: number }
 export interface QuotaConfig { writeDaily: number; interactDaily: number; coinDaily: number }
@@ -15,8 +14,6 @@ export interface ShareConfig { enabled: boolean }
 export interface RiskConfig { minGapMs: number }
 
 export interface Config {
-  /** 它叫什么（可空）：只用于心跳抬头 —— 插件不写死任何名字，留空就不点名 */
-  persona: PersonaConfig
   /** 账号自己（cookie 体检时自动回填；与主人共用一个身份） */
   self: SelfConfig
   /** 兑底节拍：它没排计划时，每这么久问一拍「现在想干嘛」（排了计划宿主只按计划投） */
@@ -28,7 +25,6 @@ export interface Config {
 }
 
 export const DEFAULTS: Config = {
-  persona: { name: '' },
   self: { mid: '', name: '' },
   pulse: { everyMin: 60 },
   quota: { writeDaily: 10, interactDaily: 10, coinDaily: 3 },

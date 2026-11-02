@@ -701,7 +701,7 @@ export function cmdTaste(flags: Flags): void {
       console.log(`  ${day(x.at)} ${what}${ref}${title}`)
     }
   }
-  console.log('\n这些都只是你自己的记录 —— 喜欢什么、看腻了什么，自己读、自己判断（想固定下来就写进日记或 persona.md）。')
+  console.log('\n这些都只是你自己的记录 —— 喜欢什么、看腻了什么，自己读、自己判断（想固定下来就写进日记）。')
 }
 
 export function cmdLedger(): void {

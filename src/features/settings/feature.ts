@@ -66,7 +66,6 @@ export function registerSettings({ route, isTrusted, cliPath }: SettingsDeps): v
     const cd = Number(cur.quota.coinDaily)
     cur.quota.coinDaily = Number.isFinite(cd) ? Math.min(20, Math.max(0, cd)) : DEFAULTS.quota.coinDaily
     cur.risk.minGapMs = Math.min(60000, Math.max(300, Number(cur.risk.minGapMs) || DEFAULTS.risk.minGapMs))
-    cur.persona = { name: String(cur.persona?.name ?? '').trim().slice(0, 24) }   // 名字只用于抬头：去掉空白、限长
     writeConfig(cur)   // 心跳每拍都重新读配置 → 保存即生效，无需任何回调 ✓
     json(res, 200, {
       ok: true, config: cur,

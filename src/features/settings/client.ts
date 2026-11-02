@@ -30,7 +30,6 @@ interface ModuleLoader { load(spec: { id: string; factory: (require: (name: stri
 
 // ── 与宿主对齐的数据形状（只列用到的字段）──────────────────────────────
 type SectionConfig = {
-  persona?: { name?: string }
   self?: { mid?: string; name?: string }
   [k: string]: unknown
 }
@@ -82,7 +81,6 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
 
     // ── 字段清单（唯一真相：加字段只改这里 + 宿主白名单 ✓）─────────────────
     const FIELDS: Field[] = [
-      { group: "人设", path: ["persona", "name"], label: "它叫什么（可空）", hint: "只用在心跳抬头（如「【某名字心跳】」）；留空就不点名。人设正文仍写 ~/.dsh/bili-lite-work/persona.md", kind: "text" },
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
       { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "评论 + 回复合计，默认 10（上限 10）", kind: "text" },
       { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 关注 / 投币合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
@@ -204,7 +202,7 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
         : `每 ${pulse.everyMin} 分钟一拍 · 共 ${pulse.beats} 拍` + (pulse.lastBeatText ? ` · 上一拍 ${pulse.lastBeatText}` : " · 下一拍马上来") + planLine;
 
       return h("div", { className: "bll" },
-        h("h3", { className: "bll-title" }, String(cfg.persona?.name ?? "").trim() || "B站养鱼"),   // 配了名字就显示名字（插件不写死）
+        h("h3", { className: "bll-title" }, "B站养鱼"),
         h("p", { className: "bll-intro" },
           "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
         pulseLine ? h("div", { className: "bll-hint" }, "💓 " + pulseLine) : null,
@@ -251,7 +249,7 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
         okMsg ? h("div", { className: "bll-ok" }, okMsg) : null,
         err ? h("div", { className: "bll-err" }, err) : null,
         out ? h("div", { className: "bll-out" }, out) : null,
-        h("div", { className: "bll-hint" }, "装完先点「启动自检」；人设可选：写一段放到 ~/.dsh/bili-lite-work/persona.md（取前 3000 字附在每次心跳前）"));
+        h("div", { className: "bll-hint" }, "装完先点「启动自检」"));
     }
 
     const inject = ["slots"];
