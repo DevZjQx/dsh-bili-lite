@@ -435,12 +435,20 @@ async function transcript(bvid, title, v, credential, read) {
 const SHOTS_KEEP = 40;
 const SHOTS_CACHE_TTL_MS = 7 * 24 * 3600_000;
 /** 缓存格式版本：抽帧算法 / 产物形状变了就 +1，旧缓存自然失效 */
-const SHOTS_CACHE_VERSION = 7;
+const SHOTS_CACHE_VERSION = 8;
 const FRAME_CONCURRENCY = 4;
 const FRAME_ATTEMPTS = 2;
 const MAX_CANDIDATES = 40;
-/** 一张拼图的宽度预算：每格的长边就按它除以格数定（4x4 仍是 640） */
+/** 一张拼图的宽度预算（软预算：每格右 / 下还要补 SHEET_SEAM，3×3 实际是 2562）；每格的长边按它除以格数定（4x4 仍是 640） */
 const SHEET_MAX_WIDTH = 2560;
+/**
+ * 每格右 / 下补的黑边：像素不变，只是把相邻两格隔开 ——
+ * 九格硬拼时列与列共边，模型容易把左格的物体算到右格。
+ * 2px 是软预算：3×3 加缝后是 2562，> SHEET_MAX_WIDTH 2px/格。
+ */
+const SHEET_SEAM = 2;
+/** 常见看图工具缩图的长边：只用来估算格子缩放后还剩多少有效像素，不是承诺（不是所有模型都按它缩） */
+const FIGURE_LONG_EDGE = 1568;
 /** 相邻帧 SSIM ≥ 这个值就当「没变」 */
 const DIFF_SSIM = 0.985;
 /**
@@ -503,6 +511,36 @@ function labelVf(font, cellNo, sec, size) {
     const text = `${cellNo} ${formatClockFine(sec)}`.replace(/:/g, '\\:');
     return `drawtext=fontfile=${filterQuote(font)}:text='${text}':x=8:y=${LABEL_MARGIN}:fontsize=${size}:fontcolor=white`;
 }
+/**
+ * 「格子里到底能读到什么」：整图像素 + 看图模型缩到长边 1568 后每格还剩多少。
+ * CLI 与 bili_shots 共用这一句，免得两处口径慢慢漂。
+ * cellHeight 含格号条，所以画面高要先减掉 labelHeight；缩放系数不放大（scale ≤ 1）。
+ */
+export function shotsPixelInfo(input, cropped = false) {
+    const sheetWidth = input.sheetWidth ?? input.cols * (input.cellWidth + SHEET_SEAM);
+    const sheetHeight = input.sheetHeight ?? input.rows * (input.cellHeight + SHEET_SEAM);
+    const frameHeight = Math.max(0, input.cellHeight - (input.labelHeight ?? 0));
+    const scale = Math.min(1, FIGURE_LONG_EDGE / Math.max(sheetWidth, sheetHeight));
+    const cropNative = input.cropWidth && input.cropHeight
+        ? `，裁切区域原生约 ${input.cropWidth}×${input.cropHeight}`
+        : '';
+    if (input.cols * input.rows <= 1) {
+        const size = `${input.cellWidth}×${frameHeight}`;
+        const note = cropped
+            ? `这一格的画面输出 ${size}（裁切区域按 ${SHEET_MAX_WIDTH} 长边以内的框缩放${cropNative}）；输出尺寸不等于原生细节，能否认字仍取决于裁切区域的原生清晰度 / 码率`
+            : `这一格取的是画面源尺寸（最多 ${SHEET_MAX_WIDTH} 长边），不再被九宫格二次缩小；能否认字仍取决于源清晰度 / 码率`;
+        return { sheetWidth, sheetHeight, note };
+    }
+    const w = Math.round(input.cellWidth * scale);
+    const h = Math.round(frameHeight * scale);
+    const tileW = Math.round((input.cellWidth + SHEET_SEAM) * scale);
+    const tileH = Math.round((input.cellHeight + SHEET_SEAM) * scale);
+    const extra = input.labelHeight ? '含格号条 / 缝约' : '含格间缝约';
+    const cropNote = cropped ? `${cropNative}，输出不等于细节` : '';
+    const note = `按长边 ${FIGURE_LONG_EDGE} 估算，每格画面约 ${w}×${h}（${extra} ${tileW}×${tileH}${cropNote}）`
+        + '—— 字幕、专名、数字别在格子里认，用 at 指定那一秒 + grid 1x1 取单帧';
+    return { sheetWidth, sheetHeight, note };
+}
 function shotsCacheFile(key) {
     return path.join(SHOTS_DIR, '.cache', `${key}.json`);
 }
@@ -514,7 +552,11 @@ function readShotsCache(key) {
         const paths = Array.isArray(meta.result.paths) ? meta.result.paths : [];
         if (!paths.length || !paths.every((p) => fs.existsSync(p)))
             return null;
-        return { ...meta.result, missingSec: meta.result.missingSec ?? [], cached: true };
+        // 同版本（v8）但缺整图尺寸的结果：按当前公式回填，别让 render 靠猜（v7 及更早由版本号直接挡掉）
+        const r = meta.result;
+        const sheetWidth = r.sheetWidth ?? r.cols * (r.cellWidth + SHEET_SEAM);
+        const sheetHeight = r.sheetHeight ?? r.rows * (r.cellHeight + SHEET_SEAM);
+        return { ...r, sheetWidth, sheetHeight, missingSec: r.missingSec ?? [], cached: true };
     }
     catch {
         return null;
@@ -840,6 +882,13 @@ export async function shots(opts) {
     const dw = Number(real?.width) || Number(v.dimension?.width) || 16;
     const dh = Number(real?.height) || Number(v.dimension?.height) || 9;
     const ar = crop ? (dw * crop[2]) / (dh * crop[3]) : dw / dh;
+    // 裁切区域的原生像素：和 scalePad 里的 trunc(iw*w/2)*2 同一口径；只用来在返回值里区分输出与原生细节
+    const cropNative = crop
+        ? {
+            width: Math.trunc((dw * crop[2]) / 2) * 2,
+            height: Math.trunc((dh * crop[3]) / 2) * 2,
+        }
+        : undefined;
     // 取 cols / rows 里大的那个当分母：2x4 这种横长条不按列数放宽，免得拼出 1280×4860 那种又高又费 token 的图
     const base = evenFloor(Math.min(Math.max(dw, dh), Math.floor(SHEET_MAX_WIDTH / Math.max(cols, rows))));
     const cw = evenFloor(ar >= 1 ? base : base * ar);
@@ -868,6 +917,8 @@ export async function shots(opts) {
             : []),
         `scale=${cw}:${ch}:force_original_aspect_ratio=decrease:flags=lanczos`,
         `pad=${cw}:${chp}:(ow-iw)/2:${label ? label.height : '(oh-ih)/2'}:color=black`,
+        // 右侧 / 底部再补 2px 黑边：拼图后列与列之间才有缝（行本来就被格号条隔开）
+        `pad=iw+${SHEET_SEAM}:ih+${SHEET_SEAM}:0:0:color=black`,
     ].join(',');
     const outDir = opts.outDir ? path.resolve(opts.outDir) : SHOTS_DIR;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 23);
@@ -1023,7 +1074,7 @@ export async function shots(opts) {
         const black = path.join(tmp, 'black.jpg');
         await runFfmpegAsync(ff, [
             '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
-            '-f', 'lavfi', '-i', `color=c=black:s=${cw}x${chp}:d=1`,
+            '-f', 'lavfi', '-i', `color=c=black:s=${cw + SHEET_SEAM}x${chp + SHEET_SEAM}:d=1`,
             '-frames:v', '1', '-q:v', '2', black,
         ], { timeout: 30_000, signal: opts.signal });
         const sheets = [];
@@ -1058,6 +1109,10 @@ export async function shots(opts) {
             /** 含顶部格号条（没有格号条时 = 画面高） */
             cellHeight: chp,
             labelHeight: label?.height,
+            sheetWidth: cols * (cw + SHEET_SEAM),
+            sheetHeight: rows * (chp + SHEET_SEAM),
+            cropWidth: cropNative?.width,
+            cropHeight: cropNative?.height,
             timesSec: sheets.flatMap((s) => s.timesSec),
             mode,
             range: range ? { fromSec: Math.max(0, range.fromSec), toSec: Math.min(span, range.toSec) } : undefined,

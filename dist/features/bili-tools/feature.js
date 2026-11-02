@@ -15,7 +15,7 @@
  * 失败一律抛：registry 接住 → isError 结果，模型能看到 message。
  * 护栏（额度 / 判重 / 分享关闭 / 必须 dry）全在 ops 里，这里不重复判断。
  */
-import { BiliError, feed, up, following, video, shots, inbox, comment, interact, schedule, history } from '../bili-agent/feature.js';
+import { BiliError, feed, up, following, video, shots, inbox, comment, interact, schedule, history, shotsPixelInfo } from '../bili-agent/feature.js';
 import { parseClockList, parseClockRange, parseCrop, formatClockFine } from '../../lib/timecode.js';
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const num = (description, extra = {}) => ({ type: 'number', description, ...extra });
@@ -361,6 +361,7 @@ function drafts() {
                 + 'diffReport 额外带回相邻帧差异分布（P50 / P75 / P90 + 按 P75 给的 suggestedThreshold）：默认按像素差（0–255，才对应 diffThreshold），'
                 + '要看相似度就 diffJudge=ssim。'
                 + '格号 + 时间码烧在每格顶部的黑边上（如「3 12:30」，不压画面），返回图片绝对路径 —— 还要用看图工具读。'
+                + '要核专名 / 数字 / 小字，用 grid 1x1 + at 指定那一秒取单帧；格子只用来定位。'
                 + '静帧只能证明「这一秒长这样」，证明不了「在动 / 在说什么」；要宿主装了 ffmpeg。',
             parameters: params({
                 bvid: str('BV 号'),
@@ -391,6 +392,10 @@ function drafts() {
                 cellWidth: { type: 'number' },
                 cellHeight: { type: 'number' },
                 labelHeight: { type: 'number' },
+                sheetWidth: { type: 'number' },
+                sheetHeight: { type: 'number' },
+                cropWidth: { type: 'number' },
+                cropHeight: { type: 'number' },
                 timesSec: arr('所有选中帧的时间点（秒，跨图展平）', { type: 'number' }),
                 mode: oneOf('抽帧方式', ['grid', 'at', 'range']),
                 range: obj({ fromSec: { type: 'number' }, toSec: { type: 'number' } }, ['fromSec', 'toSec']),
@@ -461,7 +466,7 @@ function drafts() {
                     fail(e);
                 }
             },
-            render(_args, value) {
+            render(args, value) {
                 const v = value;
                 const ignore = v.diffIgnoreBottom ? `（忽略底部 ${Math.round(v.diffIgnoreBottom * 100)}%）` : '';
                 const judge = v.diffThreshold !== undefined ? `（像素差 > ${v.diffThreshold}）` : '';
@@ -488,6 +493,9 @@ function drafts() {
                 }
                 const strip = v.labelHeight ? `（顶部 ${v.labelHeight}px 是格号条，不压画面）` : '';
                 lines.push(`一格 ${v.cellWidth}×${v.cellHeight}${strip}，按行读（每张图从 1 重新数）；用看图工具读路径。`);
+                const cropped = Boolean(asStr(args?.crop));
+                const px = shotsPixelInfo(v, cropped);
+                lines.push(`整图 ${px.sheetWidth}×${px.sheetHeight}；${px.note}`);
                 if (!v.labels)
                     lines.push('图上没烧格号 / 时间码（缺字体 / drawtext），按上面的时间码对照。');
                 if (v.missingSec.length)

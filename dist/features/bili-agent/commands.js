@@ -10,7 +10,7 @@ import { apiGet, explainCode, loadCred, saveCred, whoami, qrGenerate, qrPoll, ge
 import { ffmpegInfo, ffmpegPath } from '../../lib/ffmpeg.js';
 import { qrMatrix, qrTerminal } from '../../lib/qrcode.js';
 import { parseClockList, parseClockRange, parseCrop, formatClockFine } from '../../lib/timecode.js';
-import { feed, up, following, video, shots, inbox, history, schedule, comment, interact, BiliError } from './ops.js';
+import { feed, up, following, video, shots, inbox, history, schedule, comment, interact, shotsPixelInfo, BiliError } from './ops.js';
 import { readPlan, planSummary, MAX_PENDING, MIN_EVERY_MIN, MAX_EVERY_MIN, DEFAULT_FOR_DAYS, MAX_FOR_DAYS } from '../../lib/schedule.js';
 // ── 小工具 ─────────────────────────────────────────────────────────────────
 const fmtNum = (n) => Number(n) >= 10000 ? (Number(n) / 10000).toFixed(1) + '万' : String(n ?? 0);
@@ -51,6 +51,7 @@ export const HELP = `用法: bun bili.ts <命令> [参数…]
                           口播 / 白板视频字幕一直在变：--diff-ignore-bottom 排掉字幕带（常见 0.25–0.35），
                           治不住轻微晃动就换 --diff-threshold（平均像素差，先试 8，再往 12 / 16 / 20 加）；
                           --diff-report 打印相邻帧的分数分布（默认像素差，附 P75 给的阈值起点；--diff-judge ssim 看相似度）
+                          要核专名 / 数字 / 小字，用 grid 1x1 + at 指定那一秒取单帧；格子只用来定位
   comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
                           发一条评论；--reply 回某一条评论（rpid 从 inbox 里抄），
                           --root 只回楼中楼时才要（顶层评论不用填）
@@ -525,6 +526,8 @@ export async function cmdShots(flags, positional) {
     }
     const strip = res.labelHeight ? `（顶部 ${res.labelHeight}px 是格号条，不压画面）` : '';
     console.log(`  一格 ${res.cellWidth}×${res.cellHeight}${strip}，按行读（格号 1 左上 → ${res.cols * res.rows} 右下）；把路径交给看图工具 ✓`);
+    const px = shotsPixelInfo(res, !!crop);
+    console.log(`  整图 ${px.sheetWidth}×${px.sheetHeight}；${px.note}`);
     if (!res.labels)
         console.log('  图上没烧格号 / 时间码（没找到字体 / ffmpeg 没 drawtext）—— 按上面的时间码对照');
     if (res.missingSec.length)

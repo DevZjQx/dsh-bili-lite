@@ -14,4 +14,4 @@
 
 **Rejected.** 把 12 个子命令一对一映射成 12 个工具 —— `selftest` / `login` / `whoami` 是人在设置页做的事，模型没有理由调；`feed` 的候选、`up` 的投稿、`inbox` 的消息才是它的决策输入。把 `up` 和 `following` 合成一个工具（不传 mid 就看关注名单）—— 两者返回值形状不同，合并只能给一个松散的联合 schema，不如两个小工具各自精确。用一个 `bili` 工具带 `command` 字符串 —— 参数无法按分支校验，description 会膨胀成帮助文档，PTC 也拿不到类型。
 
-**Exceptions.** `bili_video` 一个工具两种返回（概览 / 字幕正文），共用一个 `kind` 判别、schema 是扁平可选字段的联合 —— 拆成两个工具就是 11 个，而「看懂一条」在模型眼里本来就是同一个动作（`read` 只是深度参数）。`bili_schedule` / `bili_history` 同理：`action` / `kind` 判别，schema 用可选字段承载不同分支。
+**Exceptions.** `bili_video` 一个工具两种返回（概览 / 字幕正文），共用一个 `kind` 判别、schema 是扁平可选字段的联合 —— 拆成两个工具就是 11 个，而「看懂一条」在模型眼里本来就是同一个动作（`read` 只是深度参数）。`bili_schedule` / `bili_history` 同理：`action` / `kind` 判别，schema 用可选字段承载不同分支。`bili_shots` 的 `render` 跟 CLI 共用 ops 的 `shotsPixelInfo`（`sheetWidth` / `sheetHeight`、有 `crop` 时的 `cropWidth` / `cropHeight` + 按长边 1568 估算的有效像素），不各写一套尺寸文案。
