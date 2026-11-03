@@ -1,16 +1,31 @@
 // ============================================================================
 // dsh-bili-lite · 账本 —— 额度 / 判重 / 「看过」的唯一真相（~/.dsh/bili-lite-work/ledger.json）
-// comment 与 watch 都记进来；「看过」只看这份账本。
+// comment 与 watch 都记进来；「看过」只看这份账本，且只留最近 200 条。
 // ============================================================================
 import { LEDGER_FILE } from '../../config/paths.js';
 import { readJson, writeJson } from '../../lib/json-file.js';
 export const today = () => new Date().toLocaleDateString('sv-SE');
 export function readLedger() { return readJson(LEDGER_FILE, { log: [] }); }
+/** 「看过」只留最近 200 条 —— 口味回顾 / 去重只看这么远，更早的交给日记 */
+const WATCH_KEEP = 200;
 export function ledgerAppend(entry) {
     const led = readLedger();
     led.log.push({ at: new Date().toISOString(), ...entry });
     if (led.log.length > 2000)
         led.log = led.log.slice(-1500);
+    // 只裁 watch：comment / interact 要撑住 7 天判重与当日额度，不能被看过的洪流挤掉
+    if (entry.type === 'watch') {
+        let drop = led.log.filter((x) => x.type === 'watch').length - WATCH_KEEP;
+        if (drop > 0) {
+            led.log = led.log.filter((x) => {
+                if (drop > 0 && x.type === 'watch') {
+                    drop--;
+                    return false;
+                }
+                return true;
+            });
+        }
+    }
     writeJson(LEDGER_FILE, led);
 }
 export function writesToday() {
