@@ -561,7 +561,7 @@ function drafts(): DraftTool[] {
           const who = m.kind === 'at' ? '@你' : '回了你'
           const when = m.atSec ? new Date(m.atSec * 1000).toLocaleString('sv-SE').slice(0, 16) : '时间未知'
           const tail = m.replyTo
-            ? `可回：bili_comment bvid=${m.bvid} message=… replyRpid=${m.replyTo.rpid}${m.replyTo.root && m.replyTo.root !== m.replyTo.rpid ? ` replyRoot=${m.replyTo.root}` : ''} mode=dry`
+            ? `可回：bili_comment bvid=${m.bvid} message=… replyRpid=${m.replyTo.rpid}${m.replyTo.root && m.replyTo.root !== m.replyTo.rpid ? ` replyRoot=${m.replyTo.root}` : ''} mode=dry（先出草稿给主人看，批准后再 go）`
             : `认不出是哪一条（可能已删）—— 别硬回，想看就 bili_video ${m.bvid}`
           return `[${m.seen ? '已见' : '新'}] ${who}：${m.from.name}（mid ${m.from.mid}）· ${when} · 《${m.title || m.bvid}》\n   他说：${m.text || '（没有正文）'}\n   ${tail}`
         })
@@ -574,12 +574,14 @@ function drafts(): DraftTool[] {
     {
       name: 'bili_comment',
       description:
-        '发一条评论（或回到某条评论下面）。**必须先 mode=dry 看一遍**，确认无误再 mode=go。'
+        '发一条评论（或回到某条评论下面）—— **不要自己发**。先用 mode=dry 生成草稿（发到哪、正文原文、额度），'
+        + '把草稿原样给主人看，等主人明确批准后再用 mode=go；没批准就不发。'
+        + '沉默、只说「再看看」、只提修改意见都不算批准；批准只对那一条草稿有效，改了正文或换了目标就重新给主人看。'
         + '护栏写死在实现里：正文不能带 @、≤500 字、每天有额度、同一视频 7 天只发一条新评论 / 同一条评论只回一次。',
       parameters: params({
         bvid: str('BV 号'),
         message: str('正文（不能带 @，≤500 字）'),
-        mode: oneOf('dry = 只出计划；go = 真发', ['dry', 'go']),
+        mode: oneOf('dry = 只出草稿（先给主人看）；go = 主人已明确批准，真发', ['dry', 'go']),
         replyRpid: num('回到哪条评论下面（rpid 从 bili_inbox 抄）'),
         replyRoot: num('楼中楼的楼层根 rpid（顶层评论的回复不用填）'),
       }, ['bvid', 'message', 'mode']),
@@ -625,10 +627,11 @@ function drafts(): DraftTool[] {
         const v = value as { kind: 'dry' | 'done'; object: { title: string; bvid: string; replyTo?: { rpid: number; root?: number } }; plan?: { referer: string; form: Record<string, string>; usedToday: number; limit: number; remainingAfter: number }; rpid?: number; usedToday?: number; limit?: number }
         if (v.kind === 'dry') {
           const p = v.plan!
-          const form = Object.entries(p.form).map(([k, val]) => `${k}=${val}`).join('&')
-          return text(`将要${v.object.replyTo ? `回复 rpid ${v.object.replyTo.rpid}` : '发评论'}：《${v.object.title}》\n${form}\n今天已写 ${p.usedToday}/${p.limit}，发出后剩 ${p.remainingAfter}\n确认无误再调一次，mode=go。`)
+          const where = v.object.replyTo ? `回复 rpid ${v.object.replyTo.rpid}` : '发一条新评论'
+          const body = p.form.message ?? ''
+          return text(`评论草稿（还没发）—— ${where}：《${v.object.title}》${v.object.bvid}\n正文：${body}\n今天已写 ${p.usedToday}/${p.limit}，发出后剩 ${p.remainingAfter}\n把上面这条草稿原样给主人看，等主人明确批准后再调一次 mode=go；没批准就别发（沉默、修改意见都不算批准）。`)
         }
-        return text(`✓ 已${v.object.replyTo ? `回复（parent rpid ${v.object.replyTo.rpid}）` : '发出'} · 新 rpid ${v.rpid ?? '?'} · 今天已写 ${v.usedToday}/${v.limit}`)
+        return text(`✓ 已${v.object.replyTo ? `回复（parent rpid ${v.object.replyTo.rpid}）` : '发出'} · 新 rpid ${v.rpid ?? '?'} · 今天已写 ${v.usedToday}/${v.limit}（主人批准后）`)
       },
     },
 

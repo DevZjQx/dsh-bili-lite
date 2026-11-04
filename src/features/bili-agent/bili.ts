@@ -18,7 +18,8 @@
 //                       [--range 02:10-02:35 [--fps 2] [--diff]] [--crop x,y,w,h]
 //                                       抽帧看画面：等间隔 / 指定时刻 / 区间密抽去重（要 ffmpeg，可选）
 //   bun bili.ts comment <BV> --message "…" [--reply <rpid> [--root <根rpid>]] --dry|--go
-//                                       发一条评论；--reply 回到某条评论下面
+//                                       发一条评论；--reply 回到某条评论下面；
+//                                       --dry 先出草稿给主人看，主人批准后才 --go
 //   bun bili.ts inbox [--n 5] [--all] 收件箱：谁 @ 了你 / 谁回了你（只读）
 //   bun bili.ts interact <BV|UID> --like | --follow | --coin [--undo] [--num 1|2] [--dry|--go]
 //                                       点赞 / 关注 / 投币（一次一件；同样先 --dry 再 --go；投币不可撤）

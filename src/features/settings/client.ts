@@ -82,7 +82,7 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
     // ── 字段清单（唯一真相：加字段只改这里 + 宿主白名单 ✓）─────────────────
     const FIELDS: Field[] = [
       { group: "心跳（节拍）", path: ["pulse", "everyMin"], label: "心跳间隔（分钟）", hint: "宿主每这么久问它一拍「现在想干嘛」；默认 60 —— 越小越活、越费 token", kind: "text" },
-      { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "评论 + 回复合计，默认 10（上限 10）", kind: "text" },
+      { group: "克制", path: ["quota", "writeDaily"], label: "每天最多写几条", hint: "评论 + 回复合计，默认 10（上限 10）；每条都要先给你看草稿、你批准后才发", kind: "text" },
       { group: "克制", path: ["quota", "interactDaily"], label: "每天最多互动几次", hint: "点赞 / 关注 / 投币合计，默认 10；同一视频 7 天内同一种互动只做一次（写死）", kind: "text" },
       { group: "克制", path: ["quota", "coinDaily"], label: "每天最多投几枚硬币", hint: "按「枚」算，默认 3（上限 20）；默认一次 1 枚，2 枚要它自己明说（写死）", kind: "text" },
       { group: "克制", path: ["risk", "minGapMs"], label: "请求间隔（毫秒）", hint: "默认 1200；连击是最容易被判机器人的特征 ✗", kind: "text" },
@@ -204,7 +204,7 @@ interface Field { group: string; path: string[]; label: string; hint: string; ki
       return h("div", { className: "bll" },
         h("h3", { className: "bll-title" }, "B站养鱼"),
         h("p", { className: "bll-intro" },
-          "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记，值得的发一条评论 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
+          "极简版「与 AI 共用 B 站号」：作息它自己规划 —— 没排计划时宿主按兑底节拍问它「现在想干嘛」，它也能用 schedule 自己排作息和定时任务；刷视频、写日记；想评论会先写草稿给你看，你批准后才发 —— 共用一个身份，它发的东西你都看得到。写额度 / 判重 / 风控熔断都写死在工具里。"),
         pulseLine ? h("div", { className: "bll-hint" }, "💓 " + pulseLine) : null,
         cred ? h("div", { className: "bll-hint" }, cred.present
           ? `当前账号：${cfg.self?.name || "?"}（mid ${cfg.self?.mid || "?"}）${cred.hasSess && cred.hasJct ? " ✓" : " ⚠️ 凭据缺字段"}${cred.fingerprint ? ` · 凭据指纹 ${cred.fingerprint}` : ""}`

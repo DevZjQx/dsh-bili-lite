@@ -1290,7 +1290,7 @@ export async function comment(opts) {
     if (!message.trim())
         throw new BiliError('usage', '正文不能为空');
     if (opts.mode !== 'dry' && opts.mode !== 'go')
-        throw new BiliError('usage', '写操作必须显式 dry 或 go', '先 dry 看一眼，再 go 真发');
+        throw new BiliError('usage', '写操作必须显式 dry 或 go', '先 dry 出草稿给主人看，主人批准后再 go');
     // 回复：parent 是要回的那条评论，root 是楼层根（不填 = 它自己就是根）
     const parent = opts.reply ? Number(opts.reply.rpid) : 0;
     const threadRoot = opts.reply?.root === undefined ? 0 : Number(opts.reply.root);

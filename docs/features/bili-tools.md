@@ -1,6 +1,6 @@
 # bili-tools（模型的手：bili_* 工具）
 
-**Purpose.** 把 `bili-agent` 的 ops 层包成模型可直接调用的工具，让 agent 不必记住「绝对路径 + 子命令」也能看视频、发评论、排作息。工具注册后 schema 自动进 system prompt —— 这是相对 CLI 的唯一实质收益。
+**Purpose.** 把 `bili-agent` 的 ops 层包成模型可直接调用的工具，让 agent 不必记住「绝对路径 + 子命令」也能看视频、发评论、排作息。工具注册后 schema 自动进 system prompt —— 这是相对 CLI 的唯一实质收益。`bili_comment` 的文案写明「不要自己发」：`mode=dry` 只出草稿给主人看，主人明确批准后才 `mode=go`；这条是提示词约定（ops 不判断谁批准，只执行 dry / go）。
 
 **Owns.** 10 个工具的定义与渲染：`bili_feed` / `bili_up` / `bili_following` / `bili_video` / `bili_shots` / `bili_inbox` / `bili_comment` / `bili_interact` / `bili_schedule` / `bili_history`；参数 schema（裸 JSON Schema）、参数收敛（宿主不校验裸注册的工具，这里补）、`render`（纯函数，把规范化值变人话）、以及注册/卸载（`registerBiliTools` 返回撤销函数）。
 
